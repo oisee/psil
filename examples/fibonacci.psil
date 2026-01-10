@@ -1,0 +1,16 @@
+% Fibonacci in PSIL
+% Classic recursive fibonacci using ifte
+
+DEFINE fib == [
+    [dup 2 <]                         % condition: n < 2
+    []                                % then: return n (already on stack)
+    [dup 1 - fib swap 2 - fib +]     % else: fib(n-1) + fib(n-2)
+    ifte
+].
+
+% Test
+"fib(10) = " print 10 fib .
+
+% Generate first 10 fibonacci numbers
+"First 10 fibs:" .
+10 iota [fib] map .

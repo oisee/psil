@@ -1,0 +1,36 @@
+% Factorial in PSIL
+% Several implementations to show different recursion styles
+
+% Using linrec (linear recursion combinator)
+DEFINE fact == [
+    [0 =]                 % predicate: n == 0?
+    [drop 1]              % true case: return 1
+    [dup 1 -]             % recurse: push n-1
+    [*]                   % after recursion: multiply
+    linrec
+].
+
+% Using tailrec (tail recursion - more efficient)
+DEFINE fact-tail == [
+    1 swap                % setup accumulator
+    [dup 0 =]             % predicate: n == 0?
+    [drop]                % true: return accumulator
+    [dup rot * swap 1 -]  % recurse: acc = acc * n, n = n - 1
+    tailrec
+].
+
+% Using primrec (primitive recursion)
+DEFINE fact-prim == [
+    [1]                   % base case: 0! = 1
+    [*]                   % combine: n * (n-1)!
+    primrec
+].
+
+% Test all three
+"linrec:  5! =" print 5 fact . newline
+"tailrec: 5! =" print 5 fact-tail . newline
+"primrec: 5! =" print 5 fact-prim . newline
+
+% Calculate factorials 0-10
+"Factorials 0-10:" .
+11 iota [fact] map .

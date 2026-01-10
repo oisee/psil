@@ -1,0 +1,131 @@
+% PSIL Standard Library
+% Common operations defined in PSIL itself
+% These can be loaded with :load stdlib.psil
+
+% === Arithmetic ===
+
+% Square a number
+DEFINE sq == [ dup * ].
+
+% Cube a number
+DEFINE cube == [ dup dup * * ].
+
+% Power: n p pow -> n^p
+DEFINE pow == [
+    [0 =]           % p == 0?
+    [drop drop 1]   % result is 1
+    [swap dup rot 1 - pow *]  % n * n^(p-1)
+    ifte
+].
+
+% Greatest common divisor (Euclidean algorithm)
+DEFINE gcd == [
+    [dup 0 =]       % b == 0?
+    [drop]          % return a
+    [dup rot swap mod swap]  % a b -> b (a mod b)
+    tailrec
+].
+
+% Least common multiple
+DEFINE lcm == [
+    dup2 gcd rot rot * swap /
+].
+
+% Absolute difference
+DEFINE absdiff == [ - abs ].
+
+% Sign: returns -1, 0, or 1
+DEFINE sign == [
+    [dup 0 <] [drop -1]
+    [[dup 0 >] [drop 1] [drop 0] ifte]
+    ifte
+].
+
+% Min of two numbers
+DEFINE min == [ dup2 < [drop] [nip] ifte ].
+
+% Max of two numbers
+DEFINE max == [ dup2 > [drop] [nip] ifte ].
+
+% Clamp value between min and max
+DEFINE clamp == [ rot min max ].
+
+% === List Operations ===
+
+% Sum of a list
+DEFINE sum == [ 0 swap [+] fold ].
+
+% Product of a list
+DEFINE product == [ 1 swap [*] fold ].
+
+% Length (defined in terms of fold)
+DEFINE len == [ 0 swap [drop 1 +] fold ].
+
+% Double each element
+DEFINE double-all == [ [2 *] map ].
+
+% Square each element
+DEFINE square-all == [ [sq] map ].
+
+% Keep only positive numbers
+DEFINE positives == [ [0 >] filter ].
+
+% Keep only negative numbers
+DEFINE negatives == [ [0 <] filter ].
+
+% Keep only even numbers
+DEFINE evens == [ [2 mod 0 =] filter ].
+
+% Keep only odd numbers
+DEFINE odds == [ [2 mod 0 !=] filter ].
+
+% Count elements matching predicate
+DEFINE count == [ swap filter size ].
+
+% Partition list by predicate: [list] [pred] partition -> [matching] [not-matching]
+DEFINE partition == [
+    dup2 filter       % [list] [pred] [matching]
+    rot rot           % [matching] [list] [pred]
+    [not] concat      % [matching] [list] [pred not]
+    filter            % [matching] [not-matching]
+].
+
+% Take while predicate is true
+DEFINE take-while == [
+    swap []           % pred acc list
+    [dup null? not]   % while list not empty
+    [
+        uncons        % pred acc first rest
+        dup2 drop     % pred acc first rest pred acc first
+        4 -rot drop   % pred acc first rest pred first
+        swap i        % pred acc first rest result
+        [
+            rot swap cons rot  % pred newacc rest
+        ]
+        [
+            drop drop []  % pred acc [] - stop by making list empty
+        ]
+        ifte
+    ]
+    while
+    drop swap drop    % return acc
+].
+
+% === Higher-order operations ===
+
+% Compose two quotations: [f] [g] compose -> [f g]
+DEFINE compose == [ concat ].
+
+% Apply quotation twice
+DEFINE twice == [ dup concat ].
+
+% Apply quotation three times
+DEFINE thrice == [ dup dup concat concat ].
+
+% === Debugging ===
+
+% Print and keep value
+DEFINE trace == [ dup . ].
+
+% Print with label
+DEFINE trace-label == [ swap print ": " print trace drop ].

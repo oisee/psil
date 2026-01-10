@@ -1,0 +1,4 @@
+% PSIL Hello World
+% The simplest PSIL program
+
+"Hello, World!" .
