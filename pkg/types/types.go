@@ -193,6 +193,46 @@ func (img *Image) GetPixel(x, y int) (r, g, b uint8) {
 	return 0, 0, 0
 }
 
+// Turtle represents a turtle graphics cursor
+type Turtle struct {
+	X, Y    float64 // position
+	Angle   float64 // heading in degrees (0 = right, 90 = up)
+	PenDown bool    // is pen drawing?
+	R, G, B uint8   // pen color
+	Img     *Image  // canvas to draw on
+}
+
+// NewTurtle creates a turtle at the center of an image
+func NewTurtle(img *Image) *Turtle {
+	return &Turtle{
+		X:       float64(img.Width) / 2,
+		Y:       float64(img.Height) / 2,
+		Angle:   90, // facing up
+		PenDown: true,
+		R:       255,
+		G:       255,
+		B:       255,
+		Img:     img,
+	}
+}
+
+func (t *Turtle) String() string {
+	pen := "down"
+	if !t.PenDown {
+		pen = "up"
+	}
+	return fmt.Sprintf("<turtle:%.1f,%.1f@%.0f° pen=%s>", t.X, t.Y, t.Angle, pen)
+}
+
+func (t *Turtle) Type() string { return "turtle" }
+
+func (t *Turtle) Equal(other Value) bool {
+	if o, ok := other.(*Turtle); ok {
+		return t == o
+	}
+	return false
+}
+
 // Error codes (stored in A register when C flag is set)
 const (
 	ErrNone             = 0

@@ -164,6 +164,27 @@ func (i *Interpreter) RegisterBuiltins() {
 	i.registerBuiltin("img-fill", builtinImgFill)
 	i.registerBuiltin("image?", builtinIsImage)
 	i.registerBuiltin("img-render", builtinImgRender) // render with shader quotation
+
+	// Turtle graphics (eltrut = turtle backwards)
+	i.registerBuiltin("turtle", builtinTurtle)       // image -> turtle (create turtle on image)
+	i.registerBuiltin("fd", builtinForward)          // turtle n -> turtle (forward)
+	i.registerBuiltin("forward", builtinForward)     // alias
+	i.registerBuiltin("bk", builtinBack)             // turtle n -> turtle (back)
+	i.registerBuiltin("back", builtinBack)           // alias
+	i.registerBuiltin("lt", builtinLeft)             // turtle n -> turtle (left turn)
+	i.registerBuiltin("left", builtinLeft)           // alias
+	i.registerBuiltin("rt", builtinRight)            // turtle n -> turtle (right turn)
+	i.registerBuiltin("right", builtinRight)         // alias
+	i.registerBuiltin("pu", builtinPenUp)            // turtle -> turtle (pen up)
+	i.registerBuiltin("penup", builtinPenUp)         // alias
+	i.registerBuiltin("pd", builtinPenDown)          // turtle -> turtle (pen down)
+	i.registerBuiltin("pendown", builtinPenDown)     // alias
+	i.registerBuiltin("pencolor", builtinPenColor)   // turtle r g b -> turtle
+	i.registerBuiltin("home", builtinHome)           // turtle -> turtle (go to center)
+	i.registerBuiltin("setxy", builtinSetXY)         // turtle x y -> turtle (teleport)
+	i.registerBuiltin("setheading", builtinSetHeading) // turtle angle -> turtle
+	i.registerBuiltin("turtle-img", builtinTurtleImg) // turtle -> image (get canvas)
+	i.registerBuiltin("turtle?", builtinIsTurtle)    // value -> bool
 }
 
 func (i *Interpreter) registerBuiltin(name string, fn func(*Interpreter) error) {
@@ -1737,6 +1758,267 @@ func builtinIsImage(i *Interpreter) error {
 		return nil
 	}
 	_, ok := v.(*types.Image)
+	i.ZFlag = ok
+	i.Push(types.Boolean(ok))
+	return nil
+}
+
+// === Turtle graphics ===
+
+// turtle: image -> turtle
+func builtinTurtle(i *Interpreter) error {
+	img, ok := i.PopImage()
+	if !ok {
+		return nil
+	}
+	t := types.NewTurtle(img)
+	i.Push(t)
+	return nil
+}
+
+// drawLine draws a line using Bresenham's algorithm
+func drawLine(img *types.Image, x0, y0, x1, y1 int, r, g, b uint8) {
+	dx := x1 - x0
+	if dx < 0 {
+		dx = -dx
+	}
+	dy := y1 - y0
+	if dy < 0 {
+		dy = -dy
+	}
+	sx := 1
+	if x0 >= x1 {
+		sx = -1
+	}
+	sy := 1
+	if y0 >= y1 {
+		sy = -1
+	}
+	err := dx - dy
+
+	for {
+		img.SetPixel(x0, y0, r, g, b)
+		if x0 == x1 && y0 == y1 {
+			break
+		}
+		e2 := 2 * err
+		if e2 > -dy {
+			err -= dy
+			x0 += sx
+		}
+		if e2 < dx {
+			err += dx
+			y0 += sy
+		}
+	}
+}
+
+// forward: turtle n -> turtle
+func builtinForward(i *Interpreter) error {
+	dist, ok := i.PopNumber()
+	if !ok {
+		return nil
+	}
+	t, ok := i.PopTurtle()
+	if !ok {
+		return nil
+	}
+
+	// Calculate new position
+	rad := t.Angle * math.Pi / 180
+	newX := t.X + float64(dist)*math.Cos(rad)
+	newY := t.Y - float64(dist)*math.Sin(rad) // Y inverted for screen coords
+
+	// Draw line if pen is down
+	if t.PenDown {
+		drawLine(t.Img, int(t.X), int(t.Y), int(newX), int(newY), t.R, t.G, t.B)
+	}
+
+	t.X = newX
+	t.Y = newY
+	i.Push(t)
+	return nil
+}
+
+// back: turtle n -> turtle
+func builtinBack(i *Interpreter) error {
+	dist, ok := i.PopNumber()
+	if !ok {
+		return nil
+	}
+	// Negate and call forward
+	i.Push(types.Number(-dist))
+	t, ok := i.PopTurtle()
+	if !ok {
+		return nil
+	}
+	i.Push(t)
+	i.Push(types.Number(-dist))
+	return builtinForward(i)
+}
+
+// left: turtle angle -> turtle
+func builtinLeft(i *Interpreter) error {
+	angle, ok := i.PopNumber()
+	if !ok {
+		return nil
+	}
+	t, ok := i.PopTurtle()
+	if !ok {
+		return nil
+	}
+	t.Angle += float64(angle)
+	// Normalize to 0-360
+	for t.Angle >= 360 {
+		t.Angle -= 360
+	}
+	for t.Angle < 0 {
+		t.Angle += 360
+	}
+	i.Push(t)
+	return nil
+}
+
+// right: turtle angle -> turtle
+func builtinRight(i *Interpreter) error {
+	angle, ok := i.PopNumber()
+	if !ok {
+		return nil
+	}
+	t, ok := i.PopTurtle()
+	if !ok {
+		return nil
+	}
+	t.Angle -= float64(angle)
+	// Normalize to 0-360
+	for t.Angle >= 360 {
+		t.Angle -= 360
+	}
+	for t.Angle < 0 {
+		t.Angle += 360
+	}
+	i.Push(t)
+	return nil
+}
+
+// penup: turtle -> turtle
+func builtinPenUp(i *Interpreter) error {
+	t, ok := i.PopTurtle()
+	if !ok {
+		return nil
+	}
+	t.PenDown = false
+	i.Push(t)
+	return nil
+}
+
+// pendown: turtle -> turtle
+func builtinPenDown(i *Interpreter) error {
+	t, ok := i.PopTurtle()
+	if !ok {
+		return nil
+	}
+	t.PenDown = true
+	i.Push(t)
+	return nil
+}
+
+// pencolor: turtle r g b -> turtle
+func builtinPenColor(i *Interpreter) error {
+	b, ok := i.PopNumber()
+	if !ok {
+		return nil
+	}
+	g, ok := i.PopNumber()
+	if !ok {
+		return nil
+	}
+	r, ok := i.PopNumber()
+	if !ok {
+		return nil
+	}
+	t, ok := i.PopTurtle()
+	if !ok {
+		return nil
+	}
+	t.R = uint8(math.Max(0, math.Min(255, float64(r))))
+	t.G = uint8(math.Max(0, math.Min(255, float64(g))))
+	t.B = uint8(math.Max(0, math.Min(255, float64(b))))
+	i.Push(t)
+	return nil
+}
+
+// home: turtle -> turtle (go to center, face up)
+func builtinHome(i *Interpreter) error {
+	t, ok := i.PopTurtle()
+	if !ok {
+		return nil
+	}
+	t.X = float64(t.Img.Width) / 2
+	t.Y = float64(t.Img.Height) / 2
+	t.Angle = 90
+	i.Push(t)
+	return nil
+}
+
+// setxy: turtle x y -> turtle
+func builtinSetXY(i *Interpreter) error {
+	y, ok := i.PopNumber()
+	if !ok {
+		return nil
+	}
+	x, ok := i.PopNumber()
+	if !ok {
+		return nil
+	}
+	t, ok := i.PopTurtle()
+	if !ok {
+		return nil
+	}
+
+	// Draw line if pen is down
+	if t.PenDown {
+		drawLine(t.Img, int(t.X), int(t.Y), int(x), int(y), t.R, t.G, t.B)
+	}
+
+	t.X = float64(x)
+	t.Y = float64(y)
+	i.Push(t)
+	return nil
+}
+
+// setheading: turtle angle -> turtle
+func builtinSetHeading(i *Interpreter) error {
+	angle, ok := i.PopNumber()
+	if !ok {
+		return nil
+	}
+	t, ok := i.PopTurtle()
+	if !ok {
+		return nil
+	}
+	t.Angle = float64(angle)
+	i.Push(t)
+	return nil
+}
+
+// turtle-img: turtle -> image
+func builtinTurtleImg(i *Interpreter) error {
+	t, ok := i.PopTurtle()
+	if !ok {
+		return nil
+	}
+	i.Push(t.Img)
+	return nil
+}
+
+// turtle?: value -> bool
+func builtinIsTurtle(i *Interpreter) error {
+	v := i.Peek()
+	if v == nil {
+		return nil
+	}
+	_, ok := v.(*types.Turtle)
 	i.ZFlag = ok
 	i.Push(types.Boolean(ok))
 	return nil

@@ -202,6 +202,20 @@ func (i *Interpreter) PopString() (types.String, bool) {
 	return s, true
 }
 
+// PopTurtle pops a turtle, sets error if not a turtle
+func (i *Interpreter) PopTurtle() (*types.Turtle, bool) {
+	v := i.Pop()
+	if v == nil {
+		return nil, false
+	}
+	t, ok := v.(*types.Turtle)
+	if !ok {
+		i.SetError(types.ErrTypeMismatch)
+		return nil, false
+	}
+	return t, true
+}
+
 // Define adds a definition to the dictionary
 func (i *Interpreter) Define(name string, value types.Value) {
 	i.Dictionary[name] = value
@@ -246,6 +260,10 @@ func (i *Interpreter) Execute(v types.Value) error {
 	case *types.QuotedSymbol:
 		// Quoted symbols push their name as a string (for define, etc.)
 		i.Push(types.String(val.Name))
+
+	case *types.Turtle:
+		// Turtles are pushed like other values
+		i.Push(val)
 
 	case types.Symbol:
 		// Look up and execute

@@ -1,0 +1,244 @@
+% Turtle Graphics Examples in PSIL
+% L-systems for fractals, trees, and more
+
+"PSIL Turtle Graphics" .
+"====================" .
+newline
+
+% === Basic Square ===
+"Drawing square..." .
+
+256 192 img-new
+0 0 0 img-fill          % black background
+turtle                   % create turtle
+
+% Draw a square - simple, no counter needed
+4 [50 fd 90 rt] times
+
+turtle-img "output/turtle-square.png" img-save
+
+% === Spiral ===
+"Drawing spiral..." .
+
+256 192 img-new
+0 0 0 img-fill
+turtle
+0 255 255 pencolor      % cyan
+
+% Spiral with counter - keep [turtle, counter] and swap around operations
+1
+36 [
+    % Stack: [turtle, len]
+    swap                % [len, turtle]
+    over 2 * fd         % forward by len*2, stack: [len, turtle]
+    91 rt               % turn right
+    swap                % [turtle, len]
+    1 +                 % increment length
+] times
+drop
+
+turtle-img "output/turtle-spiral.png" img-save
+
+% === Star ===
+"Drawing star..." .
+
+256 192 img-new
+0 0 0 img-fill
+turtle
+255 255 0 pencolor      % yellow
+
+5 [60 fd 144 rt] times
+
+turtle-img "output/turtle-star.png" img-save
+
+% === Hexagon ===
+"Drawing hexagon..." .
+
+256 192 img-new
+0 0 0 img-fill
+turtle
+255 100 100 pencolor    % pink
+
+6 [40 fd 60 rt] times
+
+turtle-img "output/turtle-hexagon.png" img-save
+
+% === Nested Squares ===
+"Drawing nested squares..." .
+
+256 192 img-new
+0 0 0 img-fill
+turtle
+pu 128 96 setxy pd      % center
+
+% Draw 8 nested rotated squares
+10
+8 [
+    % Stack: [turtle, size]
+    swap                % [size, turtle]
+    over                % [size, turtle, size]
+    dup dup             % [size, turtle, size, size, size]
+    255 mod             % r
+    swap 2 * 255 mod    % g
+    rot 3 * 255 mod     % b
+    pencolor            % [size, turtle]
+
+    % Draw square: need [size, turtle] -> loop with [turtle, size]
+    swap                % [turtle, size]
+    4 [
+        swap            % [size, turtle]
+        over fd         % forward by size
+        90 rt           % turn
+        swap            % [turtle, size]
+    ] times
+    swap                % [size, turtle]
+
+    15 rt               % rotate for next
+    swap                % [turtle, size]
+    8 +                 % increase size
+] times
+drop
+
+turtle-img "output/turtle-nested.png" img-save
+
+% === Koch Curve (simple iterative version) ===
+"Drawing Koch curve..." .
+
+% Koch segment: given length, draws the _/\_ shape
+DEFINE koch-step == [
+    % turtle length -> turtle
+    3 /                 % [turtle, len/3]
+    swap                % [len, turtle]
+    over fd 60 lt       % forward, turn left
+    over fd 120 rt      % forward, turn right (back)
+    over fd 60 lt       % forward, turn left
+    swap fd             % [len, turtle] -> fd consumes both -> [turtle]
+].
+
+256 192 img-new
+0 0 0 img-fill
+turtle
+pu 20 140 setxy pd
+0 setheading
+255 150 50 pencolor
+
+% Draw one Koch curve (one level of iteration)
+180 koch-step
+
+turtle-img "output/turtle-koch.png" img-save
+
+% === Sierpinski Triangle (outline) ===
+"Drawing Sierpinski outline..." .
+
+256 192 img-new
+0 0 0 img-fill
+turtle
+pu 30 170 setxy pd
+0 setheading
+100 200 255 pencolor
+
+% Simple Sierpinski using subdivision
+% Level 1: just draw a triangle
+DEFINE triangle == [
+    % turtle size -> turtle
+    swap                % [size, turtle]
+    3 [
+        over fd 120 rt  % forward by size, turn
+    ] times
+    nip                 % drop size, keep turtle
+].
+
+128 triangle
+
+turtle-img "output/turtle-sierpinski.png" img-save
+
+% === Simple Tree ===
+"Drawing tree..." .
+
+256 192 img-new
+0 0 20 img-fill         % dark blue
+turtle
+pu 128 180 setxy pd
+90 setheading
+100 255 100 pencolor    % green
+
+% Draw a simple Y-shaped tree
+DEFINE simple-tree == [
+    % turtle size -> turtle
+    swap                % [size, turtle]
+    over fd             % forward by size (trunk)
+    45 lt               % turn left
+    over 2 / fd         % left branch (half size)
+    over 2 / neg fd     % back
+    90 rt               % turn right
+    over 2 / fd         % right branch
+    over 2 / neg fd     % back
+    45 lt               % restore heading
+    swap neg fd         % back to start, leaves [turtle]
+].
+
+50 simple-tree
+
+turtle-img "output/turtle-tree.png" img-save
+
+% === Colorful Circles ===
+"Drawing colorful pattern..." .
+
+256 192 img-new
+0 0 0 img-fill
+turtle
+
+% Draw 12 colorful circles with counter for color
+0
+12 [
+    % Stack: [turtle, counter]
+    swap                % [counter, turtle]
+    over                % [counter, turtle, counter]
+    dup dup             % [counter, turtle, c, c, c]
+    20 * 255 mod        % r
+    swap 15 * 50 + 255 mod    % g
+    rot 10 * 100 + 255 mod    % b
+    pencolor            % [counter, turtle]
+
+    36 [10 fd 10 rt] times  % draw circle
+    30 rt                    % rotate for next
+
+    swap                % [turtle, counter]
+    1 +                 % increment counter
+] times
+drop
+
+turtle-img "output/turtle-circles.png" img-save
+
+% === Dragon Curve (simple) ===
+"Drawing dragon curve..." .
+
+256 192 img-new
+0 0 0 img-fill
+turtle
+pu 100 120 setxy pd
+0 setheading
+255 100 200 pencolor
+
+% Dragon curve approximation using simple rules
+DEFINE dragon-step == [
+    % turtle len -> turtle
+    swap                % [len, turtle]
+    over fd             % forward
+    90 rt               % turn right
+    swap fd             % forward again, leaves [turtle]
+].
+
+5
+6 [
+    % Stack: [turtle, len]
+    swap                % [len, turtle]
+    over dragon-step    % [len, turtle] -> dragon-step -> [len, turtle]
+    90 lt               % alternate direction
+    swap                % [turtle, len]
+] times
+drop
+
+turtle-img "output/turtle-dragon.png" img-save
+
+"All turtle graphics complete!" .
