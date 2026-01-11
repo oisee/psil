@@ -12,6 +12,7 @@ PSIL is a concatenative, stack-based, point-free functional language inspired by
 - **Graphics system** - create and render images with shader-style programming
 - **Turtle graphics** - Logo-style turtle for L-systems and fractals
 - **Math functions** - sin, cos, sqrt, pow, lerp, clamp, smoothstep, etc.
+- **micro-PSIL bytecode VM** - compact bytecode for Z80/6502 implementation
 - **CPS-compatible semantics** - designed for easy compilation to bytecode
 
 ## Quick Start
@@ -302,6 +303,53 @@ go test ./...
 ### Definition
 `define`, `undefine`
 
+## micro-PSIL: Bytecode VM
+
+micro-PSIL is a minimal bytecode VM designed for Z80/6502 implementation. It uses UTF-8 style encoding for compact programs.
+
+```bash
+# Build
+go build ./cmd/micro-psil
+
+# Run examples
+./micro-psil examples/micro/arithmetic.mpsil
+./micro-psil examples/micro/npc-thought.mpsil
+
+# Disassemble
+./micro-psil -disasm examples/micro/npc-thought.mpsil
+
+# REPL mode
+./micro-psil
+```
+
+### Bytecode Format
+
+| Range | Length | Usage |
+|-------|--------|-------|
+| 0x00-0x1F | 1 byte | Commands (dup, swap, +, -, etc.) |
+| 0x20-0x3F | 1 byte | Small numbers (0-31) |
+| 0x40-0x5F | 1 byte | Symbols (health, energy, fear) |
+| 0x60-0x7F | 1 byte | Quotation refs ([0]-[31]) |
+| 0x80-0xBF | 2 bytes | Extended ops (push.b, jmp, jz) |
+| 0xC0-0xDF | 3 bytes | Far ops (push.w, far jumps) |
+| 0xF0-0xFF | 1 byte | Special (halt, yield) |
+
+### NPC Thought Example
+
+```asm
+; "If health < 10 AND enemy nearby, flee"
+'health @           ; load health
+10 <                ; less than 10?
+'enemy @            ; load enemy flag
+and                 ; both true?
+[flee] [fight]      ; quotation refs
+ifte                ; conditional
+```
+
+Compiles to **10 bytes**: `45 17 2A 0C 4C 17 0E 60 61 13`
+
+See [micro-PSIL Design Report](reports/2026-01-11-001-micro-psil-bytecode-vm.md) for details.
+
 ## Architecture
 
 PSIL is designed with future compilation in mind:
@@ -316,16 +364,33 @@ Parser (Participle v2)
 AST (typed structs)
     |
     v
-Interpreter (current) / Bytecode Compiler (future)
-    |
-    v
-Execution / VM (Z80/6502 compatible)
+Interpreter ←──────── micro-PSIL VM
+    |                      |
+    v                      v
+REPL / Files         Bytecode execution
+                     (Z80/6502 compatible)
 ```
 
-## Design Documents
+## Documentation
 
-See `reports/` for detailed design documentation:
-- `2026-01-10-001-psil-design-rationale.md` - Theoretical foundations and design decisions
+### Design Reports
+
+See [`reports/`](reports/) for detailed design documentation:
+
+| Report | Description |
+|--------|-------------|
+| [PSIL Design Rationale](reports/2026-01-10-001-psil-design-rationale.md) | Theoretical foundations and language design |
+| [micro-PSIL Bytecode VM](reports/2026-01-11-001-micro-psil-bytecode-vm.md) | Bytecode format, encoding, Z80 implementation |
+
+### Architecture Decision Records
+
+See [`docs/adr/`](docs/adr/) for architectural decisions:
+
+| ADR | Title |
+|-----|-------|
+| [ADR-001](docs/adr/001-bytecode-encoding.md) | UTF-8 Style Bytecode Encoding |
+| [ADR-002](docs/adr/002-stack-format.md) | Tagged Stack Value Format |
+| [ADR-003](docs/adr/003-symbol-slots.md) | Fixed Symbol Slots for NPC State |
 
 ## License
 
