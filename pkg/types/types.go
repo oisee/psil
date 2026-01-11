@@ -84,6 +84,21 @@ func (s Symbol) Equal(other Value) bool {
 	return false
 }
 
+// QuotedSymbol represents a quoted symbol ('symbol) - pushed as data, not executed
+type QuotedSymbol struct {
+	Name string
+}
+
+func (q *QuotedSymbol) String() string { return "'" + q.Name }
+func (q *QuotedSymbol) Type() string   { return "quoted-symbol" }
+
+func (q *QuotedSymbol) Equal(other Value) bool {
+	if o, ok := other.(*QuotedSymbol); ok {
+		return q.Name == o.Name
+	}
+	return false
+}
+
 // Quotation represents a block of code (list of values).
 // This is the key type - quotations are first-class values.
 type Quotation struct {

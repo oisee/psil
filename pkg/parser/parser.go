@@ -34,12 +34,13 @@ type Quotation struct {
 
 // Expression: literal | symbol | quotation
 type Expression struct {
-	Number    *float64   `  @Number`
-	String    *string    `| @String`
-	Boolean   *string    `| @("true" | "false")`
-	Symbol    *string    `| @Ident`
-	Operator  *string    `| @Operator`
-	Quotation *Quotation `| @@`
+	Number       *float64   `  @Number`
+	String       *string    `| @String`
+	Boolean      *string    `| @("true" | "false")`
+	QuotedSymbol *string    `| "'" @Ident`  // 'symbol - quoted symbol (data, not executed)
+	Symbol       *string    `| @Ident`
+	Operator     *string    `| @Operator`
+	Quotation    *Quotation `| @@`
 }
 
 // PSIL lexer definition
@@ -58,8 +59,8 @@ var psilLexer = lexer.MustSimple([]lexer.SimpleRule{
 	// Operators (single char ops that are valid symbols)
 	{Name: "Operator", Pattern: `[+\-*/<=>.!?@#$&|~^]+`},
 
-	// Brackets and punctuation
-	{Name: "Punct", Pattern: `[\[\]==]`},
+	// Brackets, punctuation, and quote
+	{Name: "Punct", Pattern: `[\[\]=='.]`},
 
 	// Identifiers (including keywords like true, false, dup, swap, img-new, etc.)
 	// Allow hyphens in identifiers for names like img-new, img-save
@@ -97,6 +98,10 @@ func (e *Expression) ToValue() types.Value {
 		return types.String(s)
 	case e.Boolean != nil:
 		return types.Boolean(*e.Boolean == "true")
+	case e.QuotedSymbol != nil:
+		// Quoted symbol - wrap in a quotation that pushes the symbol as data
+		// 'foo -> pushes the symbol "foo" to the stack (not executed)
+		return &types.QuotedSymbol{Name: *e.QuotedSymbol}
 	case e.Symbol != nil:
 		return types.Symbol(*e.Symbol)
 	case e.Operator != nil:

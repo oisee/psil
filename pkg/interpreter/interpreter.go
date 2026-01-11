@@ -243,6 +243,10 @@ func (i *Interpreter) Execute(v types.Value) error {
 		// Images are pushed like other values
 		i.Push(val)
 
+	case *types.QuotedSymbol:
+		// Quoted symbols push their name as a string (for define, etc.)
+		i.Push(types.String(val.Name))
+
 	case types.Symbol:
 		// Look up and execute
 		if def, ok := i.Dictionary[string(val)]; ok {
