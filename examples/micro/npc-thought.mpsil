@@ -1,0 +1,72 @@
+; micro-PSIL example: NPC "thought" meme
+; This demonstrates how NPC behavior can be encoded as bytecode
+
+; Setup: Initialize some memory slots (simulating NPC state)
+; Slot 5 (health) = 8 (low health)
+; Slot 6 (energy) = 50
+; Slot 12 (enemy) = 1 (enemy nearby)
+
+8 5 !               ; health = 8
+50 6 !              ; energy = 50
+1 12 !              ; enemy = 1 (true)
+
+; Define quotations for behaviors
+QUOT flee 0
+    70 call 2       ; F
+    108 call 2      ; l
+    101 call 2      ; e
+    101 call 2      ; e
+    33 call 2       ; !
+    call 0
+    ret
+ENDQUOT
+
+QUOT fight 1
+    70 call 2       ; F
+    105 call 2      ; i
+    103 call 2      ; g
+    104 call 2      ; h
+    116 call 2      ; t
+    33 call 2       ; !
+    call 0
+    ret
+ENDQUOT
+
+QUOT idle 2
+    73 call 2       ; I
+    100 call 2      ; d
+    108 call 2      ; l
+    101 call 2      ; e
+    call 0
+    ret
+ENDQUOT
+
+; Main thought: "If health < 10 and enemy nearby, flee. Otherwise fight."
+;
+; In bytecode (what this compiles to):
+; [0x45] 'health
+; [0x17] @ (load)
+; [0x80 0x0A] push 10
+; [0x0C] <
+; [0x4C] 'enemy
+; [0x17] @ (load)
+; [0x0E] and
+; [0x60] [flee]
+; [0x61] [fight]
+; [0x13] ifte
+
+'health             ; push symbol for health slot
+@                   ; load health value
+10                  ; push 10
+<                   ; health < 10?
+
+'enemy              ; push symbol for enemy slot
+@                   ; load enemy value (1 = true)
+
+and                 ; both conditions true?
+
+[0]                 ; [flee] quotation
+[1]                 ; [fight] quotation
+ifte                ; if condition then flee else fight
+
+halt

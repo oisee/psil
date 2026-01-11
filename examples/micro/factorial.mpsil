@@ -1,0 +1,21 @@
+; micro-PSIL example: Factorial
+; Calculate 5! = 120
+
+; Quotation 0: factorial body
+; n -- n! (or n * fact(n-1))
+QUOT fact 0
+    dup 1 >           ; n > 1?
+    jz done           ; if not, we're done
+    dup dec           ; n (n-1)
+    [0] exec          ; n fact(n-1)
+    *                 ; n * fact(n-1)
+done:
+    ret
+ENDQUOT
+
+; Main program
+5                     ; push 5
+[0] exec              ; call factorial
+.                     ; print result
+call 0                ; newline
+halt

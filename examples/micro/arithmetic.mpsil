@@ -1,0 +1,34 @@
+; micro-PSIL example: Basic arithmetic
+; Demonstrates stack operations and math
+
+; 2 + 3 = 5
+2 3 + .
+call 0
+
+; 10 - 4 = 6
+10 4 - .
+call 0
+
+; 7 * 8 = 56
+7 8 * .
+call 0
+
+; 100 / 5 = 20
+push.b 100
+5 / .
+call 0
+
+; (2 + 3) * (4 + 5) = 5 * 9 = 45
+2 3 +
+4 5 +
+* .
+call 0
+
+; Stack manipulation: dup, swap
+5 dup * .            ; 5^2 = 25
+call 0
+
+3 7 swap - .         ; 7 - 3 = 4
+call 0
+
+halt

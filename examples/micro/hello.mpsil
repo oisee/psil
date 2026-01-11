@@ -1,0 +1,17 @@
+; micro-PSIL example: Hello World
+; Each number is printed as character
+
+72 call 2    ; H
+101 call 2   ; e
+108 call 2   ; l
+108 call 2   ; l
+111 call 2   ; o
+32 call 2    ; (space)
+87 call 2    ; W
+111 call 2   ; o
+114 call 2   ; r
+108 call 2   ; l
+100 call 2   ; d
+33 call 2    ; !
+call 0       ; newline
+halt
