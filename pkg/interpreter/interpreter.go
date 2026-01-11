@@ -174,6 +174,34 @@ func (i *Interpreter) PopBoolean() (types.Boolean, bool) {
 	return b, true
 }
 
+// PopImage pops an image, sets error if not an image
+func (i *Interpreter) PopImage() (*types.Image, bool) {
+	v := i.Pop()
+	if v == nil {
+		return nil, false
+	}
+	img, ok := v.(*types.Image)
+	if !ok {
+		i.SetError(types.ErrTypeMismatch)
+		return nil, false
+	}
+	return img, true
+}
+
+// PopString pops a string, sets error if not a string
+func (i *Interpreter) PopString() (types.String, bool) {
+	v := i.Pop()
+	if v == nil {
+		return "", false
+	}
+	s, ok := v.(types.String)
+	if !ok {
+		i.SetError(types.ErrTypeMismatch)
+		return "", false
+	}
+	return s, true
+}
+
 // Define adds a definition to the dictionary
 func (i *Interpreter) Define(name string, value types.Value) {
 	i.Dictionary[name] = value
@@ -209,6 +237,10 @@ func (i *Interpreter) Execute(v types.Value) error {
 
 	case *types.Quotation:
 		// Quotations are pushed, not executed
+		i.Push(val)
+
+	case *types.Image:
+		// Images are pushed like other values
 		i.Push(val)
 
 	case types.Symbol:

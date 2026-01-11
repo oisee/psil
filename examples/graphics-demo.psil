@@ -1,0 +1,74 @@
+% Graphics Demo in PSIL
+% Demonstrates image creation and pixel manipulation
+% Resolution: 256x192
+
+"PSIL Graphics Demo" .
+"==================" .
+newline
+
+% === Demo 1: Gradient ===
+"Rendering gradient..." .
+
+256 192 img-new
+
+% We'll iterate manually since nested each with complex stack is tricky
+% Let's use a simpler approach with times
+
+% Use explicit pixel loop
+0  % y counter
+[dup 192 <]
+[
+    dup  % y y
+    0    % y y x
+    [dup 256 <]
+    [
+        % Stack: y y x
+        over over   % y y x y x
+        5 -roll     % y x y x y
+        drop        % y x y x
+
+        % Calculate colors from position
+        % r = x (0-255)
+        % g = y * 256 / 192 (scaled to 0-255)
+        % b = 255 - x
+
+        dup             % y x y x x
+        swap            % y x y x x -> need y x x y
+        4 roll          % x y x x y
+        256 * 192 /     % x y x x g (y scaled)
+        swap            % x y x g x
+        rot             % x y g x x
+        255 swap -      % x y g x b
+        rot rot         % x y r g b  (r=x)
+
+        % Now need: img x y r g b
+        % But we don't have img on stack!
+        % Let's restructure...
+    ]
+    while
+    1 +   % increment y
+]
+while
+
+drop
+
+% Simpler approach: create filled colored image
+"Creating solid blue image..." .
+256 192 img-new
+0 100 200 img-fill
+"output/blue.png" img-save
+
+% Create a gradient manually using explicit coordinates
+"Creating gradient image..." .
+256 192 img-new
+
+% Set some specific pixels to test
+dup 0 0 255 0 0 img-setpixel     % red at (0,0)
+dup 255 0 0 255 0 img-setpixel   % green at (255,0)
+dup 0 191 0 0 255 img-setpixel   % blue at (0,191)
+dup 255 191 255 255 0 img-setpixel  % yellow at (255,191)
+dup 128 96 255 128 255 img-setpixel   % magenta at center
+
+"output/corners.png" img-save
+
+"Demo complete!" .

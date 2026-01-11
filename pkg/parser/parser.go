@@ -61,8 +61,9 @@ var psilLexer = lexer.MustSimple([]lexer.SimpleRule{
 	// Brackets and punctuation
 	{Name: "Punct", Pattern: `[\[\]==]`},
 
-	// Identifiers (including keywords like true, false, dup, swap, etc.)
-	{Name: "Ident", Pattern: `[a-zA-Z_][a-zA-Z0-9_]*`},
+	// Identifiers (including keywords like true, false, dup, swap, img-new, etc.)
+	// Allow hyphens in identifiers for names like img-new, img-save
+	{Name: "Ident", Pattern: `[a-zA-Z_][a-zA-Z0-9_-]*`},
 })
 
 // Parser is the PSIL parser

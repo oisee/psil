@@ -1,0 +1,155 @@
+% Sphere Raymarching in PSIL
+% Renders a raymarched sphere at 256x192 resolution
+% Output: output/sphere.png
+
+"PSIL Sphere Raymarching" .
+"=======================" .
+newline
+
+% === Configuration ===
+DEFINE WIDTH == [256].
+DEFINE HEIGHT == [192].
+
+% === Helper: 3D Vector length ===
+% x y z -> length
+DEFINE vec3-length == [
+    dup * rot        % z*z x y
+    dup * rot        % z*z y*y x
+    dup *            % z*z y*y x*x
+    + +              % sum
+    sqrt
+].
+
+% === Sphere distance function ===
+% sphere at origin, radius 1
+% x y z -> distance
+DEFINE sphere-dist == [
+    vec3-length 1 -
+].
+
+% === Ray march single pixel ===
+% Returns grayscale value (0-255)
+% x y -> gray
+DEFINE raymarch-pixel == [
+    % Convert pixel coords to normalized device coords
+    % ndcx = x / WIDTH * 2 - 1
+    % ndcy = 1 - y / HEIGHT * 2
+
+    % x y
+    swap WIDTH i / 2 * 1 -    % y ndcx
+    swap HEIGHT i / 2 * 1 swap - % ndcx ndcy
+
+    % Create ray: origin (0,0,-3), direction (ndcx, ndcy, 1) normalized
+    % Ray direction normalization: dir / |dir|
+
+    % Calculate direction length for normalization
+    over over           % ndcx ndcy ndcx ndcy
+    dup *               % ndcx ndcy ndcx ndcy*ndcy
+    swap dup *          % ndcx ndcy ndcy*ndcy ndcx*ndcx
+    + 1 +               % ndcx ndcy (ndcx^2 + ndcy^2 + 1)
+    sqrt                % ndcx ndcy dir-len
+
+    % Normalize: ndcx/len, ndcy/len, 1/len
+    dup 1 swap /        % ndcx ndcy len (1/len)
+    3 -roll             % ndcy len 1/len ndcx
+    3 roll /            % ndcy 1/len (ndcx/len) = dx
+    3 -roll             % 1/len dx ndcy
+    rot /               % dx (ndcy/len) = dy
+    swap                % dy dx
+    rot                 % dx dy dz
+
+    % Now march the ray
+    % Starting at z = -3, step forward
+    % t = total distance traveled
+    0                   % dx dy dz t
+
+    % March 32 steps
+    32 [
+        % Stack: dx dy dz t
+        % Calculate point: (dx*t, dy*t, dz*t - 3)
+        dup 4 pick *        % dx dy dz t (dx*t)
+        over 4 pick *       % dx dy dz t px (dy*t)
+        2 pick 4 pick * 3 - % dx dy dz t px py pz
+
+        % Get distance to sphere
+        sphere-dist         % dx dy dz t px py d
+
+        % Add to total (simplification - actual raymarching would check)
+        drop drop           % dx dy dz t d
+
+        % If distance < 0.01, we hit
+        dup 0.01 <
+        [drop]              % keep current t if hit
+        [+]                 % else add distance
+        ifte
+    ] times
+
+    % t is our distance - convert to color
+    % dx dy dz t
+    3 roll drop         % dy dz t
+    rot drop            % t dz
+    drop                % t
+
+    % Map distance to brightness
+    % Closer = brighter
+    5 min               % clamp to 5
+    5 /                 % 0 to 1
+    1 swap -            % invert
+    255 *               % 0 to 255
+    floor
+].
+
+% === Render image using fold approach ===
+% We'll build up pixels as we go
+
+"Creating image..." .
+WIDTH i HEIGHT i img-new
+
+% For simplicity, let's render a few key pixels to test
+% Then do full render
+
+"Testing single pixels..." .
+
+% Test center pixel
+dup 128 96
+    raymarch-pixel
+    dup dup             % gray gray gray = r g b
+    img-setpixel
+
+"Rendering full image (this may take a while)..." .
+
+% Full render - iterate over all y values
+HEIGHT i iota [
+    % Stack: img y
+    over                % img y img
+    swap                % img img y
+    WIDTH i iota [
+        % Stack: img img y x
+        2 pick          % img img y x y
+        over            % img img y x y x
+        swap            % img img y x x y
+
+        % Calculate pixel color
+        raymarch-pixel  % img img y x gray
+
+        % Set r=g=b=gray
+        dup dup         % img img y x gray gray gray
+
+        % Need: img x y r g b
+        5 -roll         % img y x gray gray gray img
+        5 roll          % y x gray gray gray img img
+        drop            % y x gray gray gray img
+        5 -roll         % gray gray gray img y x
+        swap            % gray gray gray img x y
+        4 roll          % gray gray img x y gray
+        4 roll          % gray img x y gray gray
+        4 roll          % img x y gray gray gray (r g b)
+        img-setpixel    % img
+    ] each
+    drop                % drop the y
+] each
+
+"Saving to output/sphere.png..." .
+"output/sphere.png" img-save
+
+"Done!" .

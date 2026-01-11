@@ -1,0 +1,87 @@
+% Simple Gradient - PSIL Graphics Test
+% Creates a color gradient at 256x192 resolution
+% Output: output/gradient.png
+
+"PSIL Gradient Demo" .
+"==================" .
+newline
+
+% Create output directory if it doesn't exist
+% (ignore error if exists)
+
+"Creating 256x192 image..." .
+256 192 img-new
+
+"Rendering gradient..." .
+
+% Simple approach: use nested each with careful stack management
+% We'll render row by row
+
+% The image stays on stack throughout
+% For each y from 0 to 191:
+%   For each x from 0 to 255:
+%     Set pixel at (x, y) with color based on position
+
+192 iota [
+    % Stack: img y
+    256 iota [
+        % Stack: img y x
+        % We need to calculate RGB from x,y position
+        % r = x (0-255)
+        % g = y * 255 / 191 (scaled to fit)
+        % b = (x + y) / 2
+
+        2 pick          % img y x img
+        2 pick          % img y x img x
+        2 pick          % img y x img x y
+
+        % Now calculate colors
+        % Stack: img y x img x y
+        over            % img y x img x y x
+        5 roll          % img x img x y x y
+        255 * 191 /     % img x img x y x g (scaled y)
+        swap rot        % img x img x g y x
+        + 2 /           % img x img x g b
+        rot             % img x img g b x (x becomes r)
+        rot rot         % img x img r g b
+        4 roll          % img img r g b x
+        4 roll          % img r g b x img
+        5 -roll         % img img x r g b... wait this is getting confusing
+
+    ] each
+    drop
+] each
+
+"Trying simpler approach..." .
+drop    % drop the broken image
+
+% Simpler: create image and set pixels one at a time using explicit loops
+256 192 img-new
+
+% Manual gradient using explicit values
+% Just set rows of color to test
+48 iota [
+    % y from 0-47 (top quarter)
+    dup
+    256 iota [
+        % Stack: img y x
+        % Red gradient row
+        over over       % img y x y x
+        drop            % img y x y
+        drop            % img y x
+        dup             % img y x x (r = x)
+        0               % img y x x 0 (g = 0)
+        0               % img y x x 0 0 (b = 0)
+        % Need: img x y r g b
+        5 -roll 5 -roll swap 4 roll 4 roll 4 roll
+        img-setpixel
+    ] each
+    drop
+] each
+
+% Save what we have so far
+dup "output/gradient-test.png" img-save
+
+"Gradient test saved!" .
+newline
+"Done!" .

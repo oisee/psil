@@ -4,6 +4,8 @@ package types
 
 import (
 	"fmt"
+	"image"
+	"image/color"
 	"strings"
 )
 
@@ -130,15 +132,63 @@ func (b *Builtin) Equal(other Value) bool {
 	return false
 }
 
+// Image represents a 2D image (for graphics operations)
+type Image struct {
+	Img    *image.RGBA
+	Width  int
+	Height int
+}
+
+// NewImage creates a new image with the given dimensions
+func NewImage(width, height int) *Image {
+	return &Image{
+		Img:    image.NewRGBA(image.Rect(0, 0, width, height)),
+		Width:  width,
+		Height: height,
+	}
+}
+
+func (img *Image) String() string {
+	return fmt.Sprintf("<image:%dx%d>", img.Width, img.Height)
+}
+
+func (img *Image) Type() string { return "image" }
+
+func (img *Image) Equal(other Value) bool {
+	// Images are equal only if they are the same object
+	if o, ok := other.(*Image); ok {
+		return img == o
+	}
+	return false
+}
+
+// SetPixel sets a pixel color at (x, y) with RGB values 0-255
+func (img *Image) SetPixel(x, y int, r, g, b uint8) {
+	if x >= 0 && x < img.Width && y >= 0 && y < img.Height {
+		img.Img.Set(x, y, color.RGBA{r, g, b, 255})
+	}
+}
+
+// GetPixel gets the RGB values at (x, y)
+func (img *Image) GetPixel(x, y int) (r, g, b uint8) {
+	if x >= 0 && x < img.Width && y >= 0 && y < img.Height {
+		c := img.Img.At(x, y).(color.RGBA)
+		return c.R, c.G, c.B
+	}
+	return 0, 0, 0
+}
+
 // Error codes (stored in A register when C flag is set)
 const (
-	ErrNone           = 0
-	ErrStackUnderflow = 1
-	ErrTypeMismatch   = 2
-	ErrDivisionByZero = 3
-	ErrUndefinedSymbol = 4
-	ErrGasExhausted   = 5
+	ErrNone             = 0
+	ErrStackUnderflow   = 1
+	ErrTypeMismatch     = 2
+	ErrDivisionByZero   = 3
+	ErrUndefinedSymbol  = 4
+	ErrGasExhausted     = 5
 	ErrInvalidQuotation = 6
+	ErrImageError       = 7
+	ErrFileError        = 8
 )
 
 // ErrorMessage returns a human-readable error message for an error code
@@ -158,6 +208,10 @@ func ErrorMessage(code int) string {
 		return "gas exhausted"
 	case ErrInvalidQuotation:
 		return "invalid quotation"
+	case ErrImageError:
+		return "image error"
+	case ErrFileError:
+		return "file error"
 	default:
 		return fmt.Sprintf("unknown error %d", code)
 	}

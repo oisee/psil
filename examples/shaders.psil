@@ -1,0 +1,158 @@
+% PSIL Shader Examples
+% Using img-render for GPU-style shader rendering
+% Resolution: 256x192
+
+"PSIL Shader Gallery" .
+"===================" .
+newline
+
+% === Shader 1: Simple Gradient ===
+
+"Rendering gradient shader..." .
+
+% Shader: x y w h -> r g b
+DEFINE gradient-shader == [
+    % Stack: x y w h
+    % r = x, g = y * 255/192, b = 128
+    drop                    % x y w
+    drop                    % x y
+    dup 255 * 192 /         % x y g
+    swap                    % x g y
+    drop                    % x g (g already scaled)
+    swap                    % g x (x becomes r)
+    128                     % g r b -> need r g b
+    rot                     % r b g
+    swap                    % r g b
+].
+
+256 192 img-new
+[gradient-shader] img-render
+"output/gradient.png" img-save
+
+% === Shader 2: Horizontal Stripes ===
+
+"Rendering stripes shader..." .
+
+DEFINE stripes-shader == [
+    % Stack: x y w h
+    drop drop drop          % y
+    8 / floor               % y/8 (stripe index)
+    2 mod                   % 0 or 1
+    [0 =]                   % condition quotation
+    [255 0 0]               % then: red
+    [0 0 255]               % else: blue
+    ifte
+].
+
+256 192 img-new
+[stripes-shader] img-render
+"output/stripes.png" img-save
+
+% === Shader 3: Radial Gradient ===
+
+"Rendering radial gradient..." .
+
+DEFINE radial-shader == [
+    % Stack: x y w h
+    % Calculate distance from center
+    dup 2 /                 % x y w h h/2
+    4 roll                  % y w h h/2 x
+    3 pick 2 /              % y w h h/2 x w/2
+    -                       % y w h h/2 dx
+    abs                     % y w h h/2 |dx|
+    4 roll                  % w h h/2 |dx| y
+    3 roll                  % w h |dx| y h/2
+    -                       % w h |dx| dy
+    abs                     % w h |dx| |dy|
+    +                       % w h dist (manhattan)
+    rot drop swap drop      % dist
+
+    % Map distance to color
+    255 * 200 /             % scale to color range
+    255 min                 % clamp
+    dup dup                 % r g b (grayscale)
+].
+
+256 192 img-new
+[radial-shader] img-render
+"output/radial.png" img-save
+
+% === Shader 4: Checkerboard ===
+
+"Rendering checkerboard..." .
+
+DEFINE checker-shader == [
+    % Stack: x y w h
+    drop drop               % x y
+    16 / floor              % x (y/16)
+    swap 16 / floor         % y/16 x/16
+    + 2 mod                 % (x/16 + y/16) mod 2
+    [0 =]                   % condition
+    [255 255 255]           % then: white
+    [50 50 50]              % else: dark gray
+    ifte
+].
+
+256 192 img-new
+[checker-shader] img-render
+"output/checker.png" img-save
+
+% === Shader 5: Plasma (simplified) ===
+
+"Rendering plasma effect..." .
+
+DEFINE plasma-shader == [
+    % Stack: x y w h
+    drop drop               % x y
+
+    % Simple plasma formula
+    over 16 / sin           % x y sin(x/16)
+    over 16 / cos           % x y sx cy
+    +                       % x y (sx+cy)
+    rot 8 / cos             % y (sx+cy) cos(x/8)
+    +                       % y v1
+    swap 8 / sin            % v1 sin(y/8)
+    +                       % combined
+
+    % Map to color
+    1 + 2 /                 % normalize to 0-1
+    255 *                   % scale
+
+    % Create colorful output
+    dup                     % v v
+    1.2 * 255 mod           % v r (shifted)
+    swap dup                % r v v
+    0.8 * 50 + 255 mod      % r v g
+    swap 1.5 * 100 + 255 mod % r g b
+].
+
+256 192 img-new
+[plasma-shader] img-render
+"output/plasma.png" img-save
+
+% === Shader 6: Simple Sphere (ray-sphere intersection) ===
+
+"Rendering sphere..." .
+
+DEFINE sphere-shader == [
+    % Stack: x y w h
+    % Ultra-simple circle
+    drop drop               % x y
+
+    % Distance from center (128, 96)
+    96 - dup *              % x (y-96)^2
+    swap 128 - dup *        % (y-96)^2 (x-128)^2
+    + sqrt                  % distance
+
+    % Map to color - inside circle = bright, outside = dark
+    80 - neg                % signed distance (negative = outside)
+    3 * 128 +               % scale
+    0 max 255 min           % clamp
+    dup dup                 % r g b (grayscale sphere)
+].
+
+256 192 img-new
+[sphere-shader] img-render
+"output/sphere.png" img-save
+
+"All shaders rendered!" .

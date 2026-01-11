@@ -1,0 +1,33 @@
+% Simplest possible image test
+% Just creates a solid color image and saves it
+
+"Creating solid red image..." .
+256 192 img-new
+255 0 0 img-fill
+"output/red.png" img-save
+
+"Creating solid green image..." .
+256 192 img-new
+0 255 0 img-fill
+"output/green.png" img-save
+
+"Creating solid blue image..." .
+256 192 img-new
+0 0 255 img-fill
+"output/blue.png" img-save
+
+% Now let's try setting individual pixels
+"Creating image with corner pixels..." .
+256 192 img-new
+0 0 0 img-fill              % start with black
+
+% Set corner pixels using dup to keep image on stack
+dup 0 0 255 0 0 img-setpixel drop       % red at top-left
+dup 255 0 0 255 0 img-setpixel drop     % green at top-right
+dup 0 191 0 0 255 img-setpixel drop     % blue at bottom-left
+dup 255 191 255 255 0 img-setpixel drop % yellow at bottom-right
+dup 128 96 255 255 255 img-setpixel drop % white at center
+
+"output/corners.png" img-save
+
+"All images created!" .

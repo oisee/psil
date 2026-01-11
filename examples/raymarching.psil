@@ -1,0 +1,311 @@
+% Raymarching in PSIL
+% Renders a simple sphere with lighting to PNG
+% Resolution: 256x192 (ZX Spectrum style)
+
+% === Vector operations ===
+% Vectors are represented as 3-element quotations [x y z]
+
+% vec3: x y z -> [x y z]
+DEFINE vec3 == [
+    [] cons cons cons
+].
+
+% vec-x: [x y z] -> x
+DEFINE vec-x == [first].
+
+% vec-y: [x y z] -> y
+DEFINE vec-y == [rest first].
+
+% vec-z: [x y z] -> z
+DEFINE vec-z == [rest rest first].
+
+% vec-add: [a] [b] -> [a+b]
+DEFINE vec-add == [
+    [+] zipwith
+].
+
+% vec-sub: [a] [b] -> [a-b]
+DEFINE vec-sub == [
+    [-] zipwith
+].
+
+% vec-scale: [v] s -> [v*s]
+DEFINE vec-scale == [
+    swap
+    [*] cons
+    map
+].
+
+% vec-dot: [a] [b] -> dot product
+DEFINE vec-dot == [
+    [*] zipwith
+    0 swap [+] fold
+].
+
+% vec-length: [v] -> length
+DEFINE vec-length == [
+    dup vec-dot sqrt
+].
+
+% vec-normalize: [v] -> normalized [v]
+DEFINE vec-normalize == [
+    dup vec-length
+    1 swap /
+    vec-scale
+].
+
+% === Scene definition ===
+
+% Sphere SDF: point center radius -> distance
+DEFINE sdf-sphere == [
+    rot rot    % radius point center
+    vec-sub    % radius (point - center)
+    vec-length % radius dist
+    swap -     % dist - radius
+].
+
+% Scene SDF: combines all objects
+% For simplicity, just one sphere at origin with radius 1
+DEFINE sdf-scene == [
+    % Input: point [x y z]
+    [0 0 0] 1 sdf-sphere
+].
+
+% === Raymarching ===
+
+% ray-march: origin dir -> distance
+% Marches ray and returns distance to hit
+DEFINE ray-march == [
+    % Stack: origin dir
+    swap                    % dir origin
+    0                       % dir origin total-dist
+    64 [                    % max iterations
+        % Stack: dir origin total-dist
+        rot rot             % total-dist dir origin
+        over over           % total-dist dir origin dir origin
+        swap rot            % total-dist dir origin origin dir
+        % Calculate current position: origin + dir * total-dist
+        4 -roll             % dir origin origin dir total-dist
+        vec-scale           % dir origin origin (dir*t)
+        vec-add             % dir origin pos
+        sdf-scene           % dir origin dist
+        % Add distance to total
+        3 -roll             % dir dist origin total
+        rot +               % dir origin new-total
+        rot rot             % new-total dir origin
+    ] times
+    drop drop               % just return total-dist
+].
+
+% === Rendering ===
+
+% Constants
+DEFINE WIDTH == [256].
+DEFINE HEIGHT == [192].
+
+% Camera setup
+DEFINE CAM-POS == [[0 0 -3]].
+DEFINE CAM-TARGET == [[0 0 0]].
+
+% render-pixel: x y -> r g b
+% Computes color for a single pixel
+DEFINE render-pixel == [
+    % Convert to normalized device coordinates (-1 to 1)
+    % x: (x / width) * 2 - 1
+    % y: 1 - (y / height) * 2  (flip Y)
+
+    swap
+    WIDTH i / 2 * 1 -       % NDC x
+    swap
+    HEIGHT i / 2 * 1 swap - % NDC y (flipped)
+
+    % Create ray direction (simple pinhole camera)
+    0.8 swap                % aspect ratio correction
+    over over               % store for later
+    swap drop swap          % x y
+    1                       % x y z (z = focal length)
+    vec3
+    vec-normalize           % ray direction
+
+    % March the ray
+    CAM-POS i swap
+    ray-march
+
+    % Convert distance to color
+    % Closer = brighter, farther = darker
+    10 min                  % clamp max distance
+    10 /                    % normalize to 0-1
+    1 swap -                % invert (closer = brighter)
+    255 *                   % scale to 0-255
+
+    % Create grayscale color
+    dup dup                 % r g b
+].
+
+% Simple sphere render
+% Uses a simpler approach for faster execution
+
+DEFINE render-simple == [
+    % Create image
+    "Creating 256x192 image..." .
+    256 192 img-new
+
+    % Fill with black
+    0 0 0 img-fill
+
+    "Rendering sphere..." .
+
+    % Render each pixel
+    192 iota [
+        % y coordinate
+        dup
+        256 iota [
+            % Stack: img y x
+            % Get x, y coordinates
+            over over       % img y x y x
+
+            % Calculate ray direction for this pixel
+            swap
+            256 / 2 * 1 -   % ndcx = x/256 * 2 - 1
+            swap
+            192 / 2 * 1 swap - % ndcy = 1 - y/192 * 2
+
+            % Create ray direction [ndcx ndcy 1]
+            1 vec3
+            vec-normalize
+
+            % Ray origin
+            [0 0 -3]
+            swap
+
+            % Simple ray-sphere intersection
+            % Sphere at origin, radius 1
+            % Ray: p = origin + t * dir
+            % Sphere: |p|^2 = r^2 = 1
+            % Solve: |origin + t*dir|^2 = 1
+
+            % a = dot(dir, dir) = 1 (normalized)
+            % b = 2 * dot(origin, dir)
+            % c = dot(origin, origin) - 1
+
+            over over       % origin dir origin dir
+            vec-dot         % origin dir (dot(origin,dir))
+            2 *             % origin dir b
+
+            rot             % dir b origin
+            dup vec-dot 1 - % dir b c
+
+            % discriminant = b^2 - 4*a*c = b^2 - 4c
+            over dup * swap 4 * -  % dir b disc
+
+            [dup 0 <]
+            [
+                % No hit - black
+                drop drop drop
+                0 0 0
+            ]
+            [
+                % Hit - calculate lighting
+                sqrt            % dir b sqrt-disc
+                swap neg swap   % dir -b sqrt-disc
+                over over       % dir -b sqrt-disc -b sqrt-disc
+                + 2 /           % dir -b sqrt-disc t1
+                rot rot         % dir t1 -b sqrt-disc
+                - 2 /           % dir t1 t2
+
+                % Use smaller positive t
+                min             % dir t
+
+                % Calculate hit point
+                swap over       % t dir t
+                vec-scale       % t (dir*t)
+                [0 0 -3] swap   % t origin (dir*t)
+                vec-add         % t hit-point
+
+                % Normal = normalized hit point (sphere at origin)
+                swap drop       % hit-point
+                vec-normalize   % normal
+
+                % Light direction (from top-right)
+                [0.5 0.7 -0.5] vec-normalize
+
+                % Diffuse lighting
+                vec-dot         % dot(normal, light)
+                0 max           % clamp to 0
+
+                % Base color (blue-ish)
+                dup 100 * 50 +  % r
+                swap
+                dup 150 * 50 +  % r g
+                swap
+                255 * 30 +      % r g b
+
+                % Clamp to 0-255
+                255 min 0 max   % clamp b
+                rot
+                255 min 0 max   % clamp g
+                rot
+                255 min 0 max   % clamp r
+                rot rot
+            ]
+            ifte
+
+            % Stack: img y x r g b
+            % Rotate to get: img x y r g b
+            5 -roll 5 -roll
+            swap
+            4 roll 4 roll 4 roll
+
+            % Set pixel
+            img-setpixel
+        ] each
+        drop  % drop y after processing row
+    ] each
+
+    % Save image
+    "output/sphere.png" img-save
+].
+
+% Run a simpler test first
+DEFINE test-image == [
+    "Creating test gradient image..." .
+    256 192 img-new
+
+    % Generate a gradient
+    192 iota [
+        dup                 % y y
+        256 iota [
+            % Stack: img y x
+            over over       % img y x y x
+
+            % r = x
+            % g = y
+            % b = (x+y)/2
+            dup             % img y x y x x
+            3 roll          % img y x x x y
+            dup             % img y x x x y y
+            4 roll          % img y x x y y x
+            + 2 /           % img y x x y b
+
+            % Set pixel (need img x y r g b)
+            5 -roll         % x y b img y x
+            swap            % x y b img x y
+            4 roll          % y b img x y x
+            4 roll          % b img x y x y
+            swap            % b img x y y x
+            5 roll          % img x y y x b
+            rot rot         % img x y r g b
+            img-setpixel
+        ] each
+        drop
+    ] each
+
+    "output/gradient.png" img-save
+].
+
+% Main entry point
+"PSIL Raymarching Demo" .
+"===================" .
+
+% Create output directory (will error if exists, that's ok)
+test-image
