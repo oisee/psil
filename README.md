@@ -9,6 +9,8 @@ PSIL is a concatenative, stack-based, point-free functional language inspired by
 - **Point-free style** - no named variables, only stack transformations
 - **Hardware-inspired flags** - Z flag for booleans, C flag for errors, A register for error codes
 - **Rich combinator library** - `ifte`, `linrec`, `while`, `map`, `filter`, `fold`
+- **Graphics system** - create and render images with shader-style programming
+- **Math functions** - sin, cos, sqrt, pow, lerp, clamp, smoothstep, etc.
 - **CPS-compatible semantics** - designed for easy compilation to bytecode
 
 ## Quick Start
@@ -22,6 +24,9 @@ go build ./cmd/psil
 
 # Run a file
 ./psil examples/fibonacci.psil
+
+# Run shader examples
+./psil examples/shaders.psil
 ```
 
 ## Language Basics
@@ -39,9 +44,16 @@ drop    % remove top: a ->
 swap    % swap top two: a b -> b a
 over    % copy second: a b -> a b a
 rot     % rotate three: a b c -> b c a
+roll    % n roll: bring nth item to top
+pick    % n pick: copy nth item to top
 
 % Arithmetic
 + - * / mod neg abs
+
+% Math functions
+sin cos tan sqrt pow log exp
+floor ceil round min max
+clamp lerp smoothstep fract
 
 % Comparison (sets Z flag)
 < > <= >= = !=
@@ -51,8 +63,11 @@ rot     % rotate three: a b c -> b c a
 i           % execute quotation: [Q] i -> ...
 call        % alias for i
 
-% Definitions
-DEFINE sq == [dup *].
+% Definitions (three styles)
+DEFINE sq == [dup *].       % Joy-style
+[dup *] "sq" define         % Point-free with string
+[dup *] 'sq define          % Point-free with quoted symbol
+
 5 sq .      % prints 25
 
 % Conditionals
@@ -60,6 +75,54 @@ DEFINE sq == [dup *].
 
 % Recursion
 [pred] [base] [rec1] [rec2] linrec
+```
+
+## Graphics System
+
+PSIL includes a graphics system for creating and rendering images:
+
+```psil
+% Create 256x192 image
+256 192 img-new
+
+% Fill with color
+255 0 0 img-fill            % fill with red
+
+% Set individual pixels
+dup 100 50 0 255 0 img-setpixel  % green pixel at (100,50)
+
+% Render with shader quotation
+% Shader receives: x y width height
+% Shader returns: r g b
+[
+    drop drop               % x y
+    swap 255 * 256 /        % r = x scaled
+    swap 255 * 192 /        % g = y scaled
+    128                     % b = constant
+] img-render
+
+% Save as PNG
+"output/image.png" img-save
+```
+
+### Shader Examples
+
+The `examples/shaders.psil` file demonstrates various shader effects:
+
+| Shader | Description |
+|--------|-------------|
+| Gradient | Simple color gradient from coordinates |
+| Stripes | Horizontal color stripes |
+| Checkerboard | Classic checkerboard pattern |
+| Plasma | Demoscene-style plasma effect |
+| Radial | Radial gradient from center |
+| Sphere | 2D signed distance field sphere |
+
+Run them with:
+```bash
+mkdir -p output
+./psil examples/shaders.psil
+# Creates: output/gradient.png, output/stripes.png, etc.
 ```
 
 ## Example: Factorial
@@ -89,6 +152,26 @@ DEFINE fib == [
 10 fib .    % prints 55
 ```
 
+## Example: Plasma Shader
+
+```psil
+DEFINE plasma-shader == [
+    drop drop               % x y
+    over 16 / sin           % sin(x/16)
+    over 16 / cos +         % + cos(y/16)
+    rot 8 / cos +           % + cos(x/8)
+    swap 8 / sin +          % + sin(y/8)
+    1 + 2 / 255 *           % normalize to 0-255
+    dup 1.2 * 255 mod       % r
+    swap dup 0.8 * 50 + 255 mod  % g
+    swap 1.5 * 100 + 255 mod     % b
+].
+
+256 192 img-new
+[plasma-shader] img-render
+"output/plasma.png" img-save
+```
+
 ## Error Handling
 
 PSIL uses hardware-inspired flags for error handling:
@@ -104,6 +187,8 @@ PSIL uses hardware-inspired flags for error handling:
 % 3 = division by zero
 % 4 = undefined symbol
 % 5 = gas exhausted
+% 7 = image error
+% 8 = file error
 
 % Check for errors
 err?        % push C flag as boolean
@@ -141,6 +226,44 @@ go test ./...
 ./psil -gas 10000
 ```
 
+## Builtins Reference
+
+### Stack Operations
+`dup`, `drop`, `swap`, `over`, `rot`, `nip`, `tuck`, `dup2`, `drop2`, `clear`, `depth`, `roll`, `unroll`, `pick`
+
+### Arithmetic
+`+`, `-`, `*`, `/`, `mod`, `neg`, `abs`, `inc`, `dec`
+
+### Math Functions
+`sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sqrt`, `pow`, `exp`, `log`, `floor`, `ceil`, `round`, `min`, `max`, `clamp`, `lerp`, `sign`, `fract`, `smoothstep`
+
+### Comparison
+`<`, `>`, `<=`, `>=`, `=`, `!=`
+
+### Logic
+`and`, `or`, `not`
+
+### Quotation Operations
+`i`, `call`, `x`, `dip`, `concat`, `cons`, `uncons`, `first`, `rest`, `size`, `null?`, `quote`, `unit`
+
+### List Operations
+`reverse`, `nth`, `take`, `ldrop`, `split`, `zip`, `zipwith`, `range`, `iota`, `flatten`, `any`, `all`, `find`, `index`, `sort`, `last`
+
+### Combinators
+`ifte`, `linrec`, `binrec`, `genrec`, `primrec`, `tailrec`, `while`, `times`, `loop`, `map`, `fold`, `filter`, `each`, `step`, `infra`, `cleave`, `spread`, `apply`
+
+### Graphics
+`img-new`, `img-setpixel`, `img-getpixel`, `img-save`, `img-width`, `img-height`, `img-fill`, `img-render`, `image?`
+
+### I/O
+`.`, `print`, `newline`, `stack`
+
+### Error Handling
+`err?`, `errcode`, `clearerr`, `onerr`, `try`
+
+### Definition
+`define`, `undefine`
+
 ## Architecture
 
 PSIL is designed with future compilation in mind:
@@ -160,6 +283,11 @@ Interpreter (current) / Bytecode Compiler (future)
     v
 Execution / VM (Z80/6502 compatible)
 ```
+
+## Design Documents
+
+See `reports/` for detailed design documentation:
+- `2026-01-10-001-psil-design-rationale.md` - Theoretical foundations and design decisions
 
 ## License
 
