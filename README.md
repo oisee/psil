@@ -10,6 +10,7 @@ PSIL is a concatenative, stack-based, point-free functional language inspired by
 - **Hardware-inspired flags** - Z flag for booleans, C flag for errors, A register for error codes
 - **Rich combinator library** - `ifte`, `linrec`, `while`, `map`, `filter`, `fold`
 - **Graphics system** - create and render images with shader-style programming
+- **Turtle graphics** - Logo-style turtle for L-systems and fractals
 - **Math functions** - sin, cos, sqrt, pow, lerp, clamp, smoothstep, etc.
 - **CPS-compatible semantics** - designed for easy compilation to bytecode
 
@@ -109,21 +110,55 @@ dup 100 50 0 255 0 img-setpixel  % green pixel at (100,50)
 
 The `examples/shaders.psil` file demonstrates various shader effects:
 
-| Shader | Description |
-|--------|-------------|
-| Gradient | Simple color gradient from coordinates |
-| Stripes | Horizontal color stripes |
-| Checkerboard | Classic checkerboard pattern |
-| Plasma | Demoscene-style plasma effect |
-| Radial | Radial gradient from center |
-| Sphere | 2D signed distance field sphere |
+| Gradient | Stripes | Checker | Plasma | Radial | Sphere |
+|----------|---------|---------|--------|--------|--------|
+| ![Gradient](docs/images/gradient.png) | ![Stripes](docs/images/stripes.png) | ![Checker](docs/images/checker.png) | ![Plasma](docs/images/plasma.png) | ![Radial](docs/images/radial.png) | ![Sphere](docs/images/sphere.png) |
 
 Run them with:
 ```bash
 mkdir -p output
 ./psil examples/shaders.psil
-# Creates: output/gradient.png, output/stripes.png, etc.
 ```
+
+## Turtle Graphics
+
+Logo-style turtle graphics for L-systems, fractals, and generative art:
+
+```psil
+256 192 img-new
+0 0 0 img-fill
+turtle                      % create turtle at center
+255 255 0 pencolor          % yellow pen
+
+5 [60 fd 144 rt] times      % draw a star
+
+turtle-img "star.png" img-save
+```
+
+### Turtle Examples
+
+| Square | Star | Spiral | Koch Curve |
+|--------|------|--------|------------|
+| ![Square](docs/images/turtle-square.png) | ![Star](docs/images/turtle-star.png) | ![Spiral](docs/images/turtle-spiral.png) | ![Koch](docs/images/turtle-koch.png) |
+
+| Sierpinski | Tree | Nested Squares | Colorful Circles |
+|------------|------|----------------|------------------|
+| ![Sierpinski](docs/images/turtle-sierpinski.png) | ![Tree](docs/images/turtle-tree.png) | ![Nested](docs/images/turtle-nested.png) | ![Circles](docs/images/turtle-circles.png) |
+
+Run them with:
+```bash
+./psil examples/turtle.psil
+```
+
+### Turtle Commands
+
+| Command | Effect | Command | Effect |
+|---------|--------|---------|--------|
+| `fd n` | Forward n pixels | `bk n` | Backward n pixels |
+| `rt n` | Turn right n degrees | `lt n` | Turn left n degrees |
+| `pu` | Pen up (stop drawing) | `pd` | Pen down (draw) |
+| `pencolor r g b` | Set pen color | `setxy x y` | Move to position |
+| `setheading n` | Set heading | `home` | Return to center |
 
 ## Example: Factorial
 
@@ -254,6 +289,9 @@ go test ./...
 
 ### Graphics
 `img-new`, `img-setpixel`, `img-getpixel`, `img-save`, `img-width`, `img-height`, `img-fill`, `img-render`, `image?`
+
+### Turtle Graphics
+`turtle`, `fd`, `bk`, `lt`, `rt`, `pu`, `pd`, `pencolor`, `setxy`, `setheading`, `home`, `turtle-img`
 
 ### I/O
 `.`, `print`, `newline`, `stack`
