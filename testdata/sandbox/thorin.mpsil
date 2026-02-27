@@ -1,0 +1,41 @@
+; Seed genome: Thorin (Hobbit-style NPC brain)
+; Priority: flee danger > pick up treasure > idle
+;
+; If danger > 5 → flee North
+; If food nearby (distance < 5) → move South toward it, eat
+; Else → idle (Thorin sits down and sings about gold)
+;
+; Ring0 slot 1 = health, slot 5 = food distance, slot 6 = danger
+; Ring1 slot 0 = move direction (1=N, 2=E, 3=S, 4=W)
+; Ring1 slot 1 = action (0=idle, 1=eat)
+;
+; Bytecode (24 bytes):
+;   8A 06 25 0D 88 07  8A 05 25 0C 88 05
+;   F1  21 8C 00 F1  23 8C 00 21 8C 01 F1
+
+; Check danger
+r0@ 6                   ; read Ring0 slot 6 (danger)
+5                       ; push 5
+>                       ; danger > 5?
+jnz 7                   ; if true, jump to flee block
+
+; Check food distance
+r0@ 5                   ; read Ring0 slot 5 (food distance)
+5                       ; push 5
+<                       ; food < 5?
+jnz 5                   ; if true, jump to eat block
+
+; Idle: Ring1 defaults to 0 (no move, no action)
+yield
+
+; Flee: move North to escape
+1                       ; push 1 (North)
+r1! 0                   ; write move direction
+yield
+
+; Eat: move South toward food, eat
+3                       ; push 3 (South)
+r1! 0                   ; write move direction
+1                       ; push 1 (eat)
+r1! 1                   ; write action
+yield

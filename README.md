@@ -662,6 +662,12 @@ See [`reports/`](reports/) for detailed design documentation:
 | [micro-PSIL Bytecode VM](reports/2026-01-11-001-micro-psil-bytecode-vm.md) | Bytecode format, encoding, Z80 implementation |
 | [micro-PSIL on MinZ](reports/2026-01-11-002-micro-psil-on-minz-feasibility.md) | Feasibility analysis for MinZ compiler/VM |
 
+### Guides
+
+| Guide | Description |
+|-------|-------------|
+| [ZX Spectrum Game Integration](docs/guide-zx-game-integration.md) | Integrating micro-PSIL NPC brains into ZX Spectrum games |
+
 ### Architecture Decision Records
 
 See [`docs/adr/`](docs/adr/) for architectural decisions:

@@ -1,0 +1,28 @@
+; Composition prefix: Cautious
+; Prepend to any brain: if health < 10, flee North and yield early.
+; Otherwise, fall through to the rest of the brain.
+;
+; This demonstrates concatenation = composition: cautious + forager
+; produces a forager that flees when health is critical.
+;
+; Ring0 slot 1 = health
+; Ring1 slot 0 = move direction
+;
+; Bytecode (10 bytes):
+;   8A 01 2A 0C 87 04 21 8C 00 F1
+;
+; When prepended to another brain, the jz jumps past the flee+yield
+; to the next brain's first instruction if health >= 10.
+
+; Check health
+r0@ 1                   ; read Ring0 slot 1 (health)
+10                      ; push 10
+<                       ; health < 10?
+jz 4                    ; if false (health >= 10), skip flee block
+
+; Flee: health is critical
+1                       ; push 1 (North)
+r1! 0                   ; write move direction
+yield                   ; end early — don't run rest of brain
+
+; Fall-through: health is OK, continue to next brain...
