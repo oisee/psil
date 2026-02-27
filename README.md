@@ -303,72 +303,131 @@ go test ./...
 ### Definition
 `define`, `undefine`
 
-## micro-PSIL: Bytecode VM
+## micro-PSIL: Bytecode VM for Z80
 
-micro-PSIL is a minimal bytecode VM designed for Z80/6502 implementation. It uses UTF-8 style encoding for compact programs.
+### Why a Bytecode VM on a Z80?
+
+The Z80 runs at 3.5 MHz with 48K of RAM. Every byte matters. A naive interpreter — tokenizing strings, hashing symbol names, walking tree structures — would burn most of that capacity on overhead. But a well-designed bytecode VM inverts the equation: the interpreter becomes a tight fetch-decode-execute loop, and the *programs* compress down to something approaching information-theoretic density.
+
+micro-PSIL's encoding is modeled on UTF-8. The most common operations — stack manipulation, small arithmetic, boolean tests — are single bytes. A complete NPC decision ("if health < 10 and enemy nearby, flee; else fight") compiles to **21 bytes** of bytecode plus quotation bodies. The entire VM core is **1,552 bytes** of Z80 machine code. That leaves ~45K for game data, maps, and hundreds of NPC behavior scripts.
+
+This matters for a specific use case: giving NPCs in retro-style games something resembling autonomous thought. Not scripted state machines, but compositional programs built from quotations, conditionals, and stack combinators. Each NPC carries a tiny program. The VM runs it, the NPC acts. The programs are so small they can be generated, mutated, or transmitted — a flock of agents each running their own 20-byte behavioral genome.
+
+The concatenative model is key. In a stack language, composition is concatenation — you glue programs together by putting one after the other. There are no variable binding headaches, no scope rules, no closures to heap-allocate. This maps directly to the Z80's sequential execution model. The VM's inner loop is essentially:
+
+```
+fetch:  LD A, (bc_pc) / INC bc_pc
+decode: CP $20 / JP C, command_table
+        CP $40 / JR C, push_small_number
+        ...
+```
+
+Quotations (code blocks) are stored as separate bytecode arrays referenced by index. `[0]` pushes quotation reference 0 onto the stack. `exec` pops it and runs it. `ifte` pops a condition and two quotation refs, runs one or the other. The Z80 implementation saves/restores the bytecode PC on the machine stack — quotation calls nest naturally using the same hardware stack the CPU already has.
+
+### Building and Running
 
 ```bash
-# Build
+# Go reference VM
 go build ./cmd/micro-psil
-
-# Run examples
 ./micro-psil examples/micro/arithmetic.mpsil
-./micro-psil examples/micro/npc-thought.mpsil
-
-# Disassemble
 ./micro-psil -disasm examples/micro/npc-thought.mpsil
 
-# REPL mode
-./micro-psil
+# Compile to bytecode
+go run tools/compile_mpsil/main.go -o z80/build examples/micro/arithmetic.mpsil
+
+# Run on Z80 (via mzx emulator)
+mzx --run z80/build/vm.bin@8000 \
+    --load z80/build/arithmetic.bin@9000 \
+    --console-io --frames DI:HALT
 ```
 
 ### Bytecode Format
 
 | Range | Length | Usage |
 |-------|--------|-------|
-| 0x00-0x1F | 1 byte | Commands (dup, swap, +, -, etc.) |
-| 0x20-0x3F | 1 byte | Small numbers (0-31) |
-| 0x40-0x5F | 1 byte | Symbols (health, energy, fear) |
-| 0x60-0x7F | 1 byte | Quotation refs ([0]-[31]) |
-| 0x80-0xBF | 2 bytes | Extended ops (push.b, jmp, jz) |
-| 0xC0-0xDF | 3 bytes | Far ops (push.w, far jumps) |
-| 0xF0-0xFF | 1 byte | Special (halt, yield) |
+| `00-1F` | 1 byte | Commands (dup, swap, +, -, *, <, ifte, exec...) |
+| `20-3F` | 1 byte | Small numbers 0-31 |
+| `40-5F` | 1 byte | Symbols (health, energy, enemy, fear...) |
+| `60-7F` | 1 byte | Quotation refs [0]-[31] |
+| `80-BF` | 2 bytes | Extended ops (push.b, jmp, jz, call builtin) |
+| `C0-DF` | 3 bytes | Far ops (push.w, far jumps) |
+| `F0-FF` | 1 byte | Special (halt, yield, end) |
 
 ### NPC Thought Example
 
 ```asm
-; "If health < 10 AND enemy nearby, flee"
-'health @           ; load health
-10 <                ; less than 10?
-'enemy @            ; load enemy flag
-and                 ; both true?
-[flee] [fight]      ; quotation refs
-ifte                ; conditional
+; "If health < 10 AND enemy nearby, flee; otherwise fight"
+8 5 !               ; health = 8
+1 12 !              ; enemy = 1
+
+'health @           ; load health       → 45 17
+10 <                ; less than 10?     → 2A 0C
+'enemy @            ; load enemy flag   → 4C 17
+and                 ; both true?        → 0E
+[0] [1]             ; [flee] [fight]    → 60 61
+ifte                ; conditional       → 13
+halt                ;                   → F0
 ```
 
-Compiles to **10 bytes**: `45 17 2A 0C 4C 17 0E 60 61 13`
+The decision logic compiles to **10 bytes**. The VM executes it, prints `Flee!`.
 
-See [micro-PSIL Design Report](reports/2026-01-11-001-micro-psil-bytecode-vm.md) for details.
+### Z80 VM Architecture
+
+```
+Memory Map:
+  $8000-$8FFF  VM code (1,552 bytes)
+  $9000-$91FF  Bytecode program (loaded)
+  $9200-$97FF  Quotation blob (loaded)
+  $B000-$B0FF  VM value stack (128 × 16-bit entries)
+  $B100-$B17F  Memory slots (64 × 16-bit)
+  $B180-$B1BF  Quotation pointer table (32 entries)
+
+I/O: OUT ($23), A via mzx --console-io (no ROM needed)
+```
+
+### Test Results
+
+All programs verified against the Go reference VM:
+
+| Program | Bytecode | Output | What it tests |
+|---------|----------|--------|---------------|
+| arithmetic | 49 bytes | `5 6 56 20 45 25 4` | Stack ops, +, -, *, /, dup, swap |
+| hello | 51 bytes | `Hello World!` | Character output via builtins |
+| factorial | 7 + 14 bytes | `120` | Recursive quotation, loop, dec, * |
+| npc-thought | 21 + 76 bytes | `Flee!` | Memory, ifte, 3 quotations |
+
+### Prebuilt Binaries
+
+The `z80/build/` directory contains ready-to-run binaries:
+
+| File | Size | Description |
+|------|------|-------------|
+| `vm.bin` | 1,552 B | Z80 micro-PSIL VM (load at $8000) |
+| `arithmetic.bin` | 49 B | Arithmetic test (load at $9000) |
+| `hello.bin` | 51 B | Hello World (load at $9000) |
+| `factorial.bin` | 7 B | Factorial main (load at $9000) |
+| `factorial_quots.bin` | 14 B | Factorial quotations (load at $9200) |
+| `npc-thought.bin` | 21 B | NPC thought main (load at $9000) |
+| `npc-thought_quots.bin` | 76 B | NPC thought quotations (load at $9200) |
+
+See [micro-PSIL Design Report](reports/2026-01-11-001-micro-psil-bytecode-vm.md) and [MinZ Feasibility Analysis](reports/2026-01-11-002-micro-psil-on-minz-feasibility.md) for details.
 
 ## Architecture
 
-PSIL is designed with future compilation in mind:
-
 ```
-Source Code
-    |
-    v
-Parser (Participle v2)
-    |
-    v
-AST (typed structs)
-    |
-    v
-Interpreter ←──────── micro-PSIL VM
-    |                      |
-    v                      v
-REPL / Files         Bytecode execution
-                     (Z80/6502 compatible)
+Source Code (.psil)          micro-PSIL (.mpsil)
+    |                              |
+    v                              v
+Parser (Participle v2)       Assembler (pkg/micro)
+    |                              |
+    v                              v
+AST (typed structs)          Bytecode (.bin)
+    |                              |
+    v                              v
+Go Interpreter               Z80 VM (1,552 bytes)
+    |                              |
+    v                              v
+REPL / Files                 mzx emulator / real hardware
 ```
 
 ## Documentation
