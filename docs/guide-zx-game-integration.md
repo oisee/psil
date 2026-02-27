@@ -4,11 +4,11 @@ A practical guide to replacing hardcoded NPC state machines with evolvable, comp
 
 ## 1. What The Hobbit and Valhalla Did (and Didn't Do)
 
-The Hobbit (1982, Melbourne House) introduced "animaction" — NPCs with independent schedules that acted between player turns. Thorin sits down and sings about gold. Gandalf wanders off. Elrond stays in Rivendell. Each NPC's behavior was a hand-written script: a fixed sequence of actions, selected by a simple priority table and a random number generator. The scripts were frozen at compile time. Philip Mitchell wrote every possible Thorin behavior by hand.
+The Hobbit (1982, Melbourne House) introduced "animaction" — NPCs with independent schedules that acted between player turns [1]. Thorin sits down and sings about gold [3]. Gandalf wanders off. Elrond stays in Rivendell. Each NPC's behavior was a hand-written script: a fixed sequence of actions, selected by a simple priority table and a random number generator. The scripts were frozen at compile time. Philip Mitchell wrote every possible Thorin behavior by hand.
 
-Valhalla (1983, Legend) pushed further. Its NPCs had life cycles — they could be born, age, fight, eat, trade, and die. The 40+ characters moved independently across 200 rooms, each driven by an action table that mapped situations to responses. But the tables, like The Hobbit's scripts, were static. A Valhalla warrior always attacked when an enemy was adjacent. A merchant always traded. Nothing learned. Nothing adapted.
+Valhalla (1983, Legend) pushed further [2]. Its NPCs had life cycles — they could be born, age, fight, eat, trade, and die. The 40+ characters moved independently across 200 rooms, each driven by an action table that mapped situations to responses. But the tables, like The Hobbit's scripts, were static. A Valhalla warrior always attacked when an enemy was adjacent. A merchant always traded. Nothing learned. Nothing adapted.
 
-Both games proved that autonomous NPCs could make 48K worlds feel alive. What they couldn't do — because behavior was encoded in Z80 assembly — was let NPCs evolve, compose new behaviors from fragments, or surprise their designers with emergent strategies. The behavior substrate (raw machine code) was the bottleneck: you can't mutate Z80 instructions and expect anything but a crash.
+Both games proved that autonomous NPCs could make 48K worlds feel alive. What they couldn't do — because behavior was encoded in Z80 assembly — was let NPCs evolve, compose new behaviors from fragments, or surprise their designers with emergent strategies. The behavior substrate (raw machine code) was the bottleneck: you can't mutate Z80 instructions and expect anything but a crash [4].
 
 ## 2. micro-PSIL NPC Brains in 60 Seconds
 
@@ -120,7 +120,7 @@ run_brain:
     RET
 ```
 
-**Timing:** 200 gas steps ≈ 2–4 ms per NPC at 3.5 MHz. A game with 4 NPCs spends ~8–16 ms per frame on brain execution — well within a 50 Hz frame budget if you spread NPCs across frames (2 per frame = ~4–8 ms).
+**Timing:** 200 gas steps ≈ 2–4 ms per NPC at 3.5 MHz [8]. A game with 4 NPCs spends ~8–16 ms per frame on brain execution — well within a 50 Hz frame budget if you spread NPCs across frames (2 per frame = ~4–8 ms).
 
 ### 3.3 Act — What the NPC Does
 
@@ -272,7 +272,7 @@ cautious_warrior = cautious_prefix ++ warrior_brain    ; 10 + 35 = 45 bytes
 
 The `jz 4` in the prefix jumps exactly past the flee block to byte 10 — the start of the appended brain. No symbol tables, no relocation. The stack is empty at the junction point, so any brain works as the suffix.
 
-This is the property unique to concatenative bytecode: you can compose behaviors by splicing byte arrays, and the result is always a valid program with well-defined semantics.
+This is the property unique to concatenative bytecode [5]: you can compose behaviors by splicing byte arrays, and the result is always a valid program with well-defined semantics. Stack-based representations produce valid programs under mutation far more often than tree-based alternatives [6].
 
 ## 5. Adapting Ring0/Ring1 for Different Genres
 
@@ -470,7 +470,7 @@ What if Thorin had carried a 24-byte genome instead of a hardcoded script? After
 
 What if Valhalla's 40 NPCs had each carried a 30-byte evolvable brain? The warriors who attacked wisely (when healthy, when the enemy was weak) would have survived and reproduced. The merchants who traded food for weapons at the right moment would have thrived. After a few generations, the simulation would have produced emergent social structures — alliances, predator-prey dynamics, specialization — that no designer wrote.
 
-The technology was available. A Z80 at 3.5 MHz can run the VM. The memory budget works. The missing insight was that concatenative bytecode is the right substrate for genetic programming: every mutation produces a valid program, every concatenation produces a valid composition, and the gas counter prevents any brain from crashing the system.
+The technology was available. A Z80 at 3.5 MHz can run the VM [7]. The memory budget works. The missing insight — one that Koza [4] hinted at but never applied to 8-bit systems, and that von Thun [5] described but never connected to GP — was that concatenative bytecode is the right substrate for genetic programming: every mutation produces a valid program [6], every concatenation produces a valid composition, and the gas counter prevents any brain from crashing the system.
 
 ## 10. File Reference
 
@@ -490,3 +490,35 @@ The technology was available. A Z80 at 3.5 MHz can run the VM. The memory budget
 | Bytecode compiler | `tools/compile_mpsil/main.go` | — |
 | Seed genomes | `testdata/sandbox/*.mpsil` | — (compiled to .bin) |
 | Cross-validation | `testdata/sandbox/crossval_test.go` | — |
+
+## References
+
+### The Hobbit and Valhalla
+
+1. Philip Mitchell and Veronika Megler, *The Hobbit* (Melbourne House, 1982). The "animaction" system gave each NPC an independent action schedule evaluated between player commands. Mitchell described the design in interviews for *Crash* magazine (1984–85). See also: Megler's 2012 retrospective at the [Digital Games Research Association](http://www.intfiction.org/forum/viewtopic.php?f=6&t=5250) and her [GDC 2015 postmortem](https://www.gdcvault.com/play/1021858/).
+
+2. Richard Edwards and Graham Stafford, *Valhalla* (Legend, 1983). NPCs had life-cycle systems — birth, aging, combat, death — driven by action tables that ran independently of the player. Stuart Williams' contemporaneous review in *Sinclair User* (issue 21, 1983) noted the NPCs' apparent autonomy. The game managed 40+ characters across 200 rooms in 48K.
+
+3. Stuart Williams, "The Hobbit" (review), *Crash Magazine* 1 (1984), pp. 28–29. Documents player reactions to NPC autonomy ("Thorin sits down and starts singing about gold").
+
+### Genetic Programming and Concatenative Languages
+
+4. John R. Koza, *Genetic Programming: On the Programming of Computers by Means of Natural Selection* (MIT Press, 1992). Foundational work on evolving programs via crossover and mutation. Koza used tree-based Lisp S-expressions; micro-PSIL substitutes flat concatenative bytecode, which admits valid crossover at every byte boundary.
+
+5. Manfred von Thun, "Joy: Forth's Functional Cousin" (2001). Joy demonstrated that concatenative semantics make program composition equivalent to sequence concatenation — the property that makes bytecode genomes safe for GP.
+
+6. Timothy Perkis, "Stack-Based Genetic Programming," *Proceedings of the 1994 IEEE World Congress on Computational Intelligence* (1994). Early demonstration that stack-based (Forth-like) representations improve GP robustness: random mutations produce executable programs far more often than in tree representations.
+
+### ZX Spectrum Technical
+
+7. Steve Vickers, *ZX Spectrum BASIC Programming* (Sinclair Research, 1982). Canonical Z80 memory map and I/O documentation for the 48K Spectrum.
+
+8. Sean Young, "The Undocumented Z80 Documented" (2005). Z80 instruction timing reference used for gas-budget calculations (Section 3.2).
+
+### Project Documentation
+
+9. [PSIL Design Rationale](../reports/2026-01-10-001-psil-design-rationale.md) — Theoretical foundations of concatenative bytecode.
+
+10. [micro-PSIL Bytecode VM](../reports/2026-01-11-001-micro-psil-bytecode-vm.md) — VM encoding, opcode table, Z80 implementation details.
+
+11. [NPC Sandbox Journey](npc-sandbox-journey.md) — Build narrative for the Go and Z80 sandbox.
