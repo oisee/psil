@@ -1,0 +1,23 @@
+; Seed genome: Random Walker
+; Uses day counter mod 4 + 1 as direction, always eats.
+;
+; Ring0 slot 10 = day (tick mod cycle)
+; Ring1 slot 0 = move direction
+; Ring1 slot 1 = action
+
+; Read day counter for pseudo-random direction
+r0@ 10                  ; read Ring0 slot 10 (day counter)
+
+; Compute direction: (day mod 4) + 1
+4                       ; push 4
+mod                     ; day mod 4
+1                       ; push 1
++                       ; + 1 (directions are 1-4)
+
+r1! 0                   ; write to Ring1 move slot
+
+; Always eat
+1                       ; push 1
+r1! 1                   ; write to Ring1 action slot
+
+yield

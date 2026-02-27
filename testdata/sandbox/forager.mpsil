@@ -1,0 +1,19 @@
+; Seed genome: Forager
+; Senses nearest food, moves toward it, eats when adjacent.
+;
+; Ring0 slot 5 = nearest food distance
+; Ring1 slot 0 = move direction (1=N, 2=E, 3=S, 4=W)
+; Ring1 slot 1 = action (0=idle, 1=eat)
+
+; Read food distance
+r0@ 5                   ; read Ring0 slot 5 (food distance)
+
+; Move South to explore
+3                       ; push 3 (South)
+r1! 0                   ; write to Ring1 move slot
+
+; Always try to eat
+1                       ; push 1 (eat)
+r1! 1                   ; write to Ring1 action slot
+
+yield

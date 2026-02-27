@@ -393,6 +393,62 @@ func (a *Assembler) assembleTokens(tokens []string, lineNum int) error {
 			continue
 		}
 
+		// Ring0 read
+		if tok == "r0@" || tok == "ring0r" {
+			if i+1 >= len(tokens) {
+				return fmt.Errorf("r0@ requires slot number")
+			}
+			i++
+			n, err := strconv.Atoi(tokens[i])
+			if err != nil || n < 0 || n > 255 {
+				return fmt.Errorf("invalid ring0 slot: %s", tokens[i])
+			}
+			a.code = append(a.code, OpRing0R, byte(n))
+			continue
+		}
+
+		// Ring1 read
+		if tok == "r1@" || tok == "ring1r" {
+			if i+1 >= len(tokens) {
+				return fmt.Errorf("r1@ requires slot number")
+			}
+			i++
+			n, err := strconv.Atoi(tokens[i])
+			if err != nil || n < 0 || n > 255 {
+				return fmt.Errorf("invalid ring1 slot: %s", tokens[i])
+			}
+			a.code = append(a.code, OpRing1R, byte(n))
+			continue
+		}
+
+		// Ring1 write
+		if tok == "r1!" || tok == "ring1w" {
+			if i+1 >= len(tokens) {
+				return fmt.Errorf("r1! requires slot number")
+			}
+			i++
+			n, err := strconv.Atoi(tokens[i])
+			if err != nil || n < 0 || n > 255 {
+				return fmt.Errorf("invalid ring1 slot: %s", tokens[i])
+			}
+			a.code = append(a.code, OpRing1W, byte(n))
+			continue
+		}
+
+		// Gas
+		if tok == "gas" {
+			if i+1 >= len(tokens) {
+				return fmt.Errorf("gas requires amount")
+			}
+			i++
+			n, err := strconv.Atoi(tokens[i])
+			if err != nil || n < 0 || n > 255 {
+				return fmt.Errorf("invalid gas amount: %s", tokens[i])
+			}
+			a.code = append(a.code, OpGas, byte(n))
+			continue
+		}
+
 		// Call builtin
 		if tok == "call" {
 			if i+1 >= len(tokens) {
@@ -546,6 +602,9 @@ func Disassemble(code []byte) string {
 
 		case op == OpHalt:
 			sb.WriteString("halt")
+			pc++
+		case op == OpYield:
+			sb.WriteString("yield")
 			pc++
 		case op == OpEnd:
 			sb.WriteString("end")

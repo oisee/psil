@@ -27,7 +27,9 @@
 ;
 ; ============================================================================
 
+    IFNDEF VM_LIB_MODE
     ORG $8000
+    ENDIF
 
 BYTECODE    EQU $9000
 QUOT_BLOB   EQU $9200
@@ -35,6 +37,7 @@ VM_STACK    EQU $B000
 VM_MEM      EQU $B100
 QUOT_TBL    EQU $B180
 
+    IFNDEF VM_LIB_MODE
 ; ── Entry ──
 entry:
     DI
@@ -70,6 +73,7 @@ entry:
 
     DI
     HALT
+    ENDIF
 
 ; ============================================================================
 ; parse_quots
@@ -131,14 +135,28 @@ pq_body: DW 0
 ; Bytecode pointer in (bc_pc). Returns on halt/end.
 ; ============================================================================
 vm_run:
+    ; Per-step gas check (if vm_gas > 0, decrement; if reaches 0, halt)
+    LD HL, (vm_gas)
+    LD A, H
+    OR L
+    JR Z, .vm_no_gas       ; gas=0 means unlimited
+    DEC HL
+    LD (vm_gas), HL
+    LD A, H
+    OR L
+    RET Z                  ; gas exhausted → return
+.vm_no_gas:
+
     ; Fetch opcode
     LD HL, (bc_pc)
     LD A, (HL)
     INC HL
     LD (bc_pc), HL
 
-    ; Halt/end
+    ; Halt/end/yield
     CP $F0
+    RET Z
+    CP $F1              ; yield
     RET Z
     CP $FF
     RET Z
@@ -245,9 +263,13 @@ do_2byte:
     CP $87 : JR Z, .jz
     CP $88 : JR Z, .jnz
     CP $82 : JR Z, .qx
-    CP $81 : JR Z, .sx
-    CP $83 : JR Z, .loc
-    CP $84 : JR Z, .sloc
+    CP $81 : JP Z, .sx
+    CP $83 : JP Z, .loc
+    CP $84 : JP Z, .sloc
+    CP $8A : JP Z, .r0r
+    CP $8B : JP Z, .r1r
+    CP $8C : JP Z, .r1w
+    CP $8E : JP Z, .gas
     JP vm_run
 
 .pb:    ; push.b
@@ -341,6 +363,39 @@ do_2byte:
     INC HL
     LD (HL), D
     JP vm_run
+
+.r0r:   ; ring0 read (read-only slot B)
+    LD A, B
+    CALL mem_rd
+    CALL push_w
+    JP vm_run
+
+.r1r:   ; ring1 read (slot 64+B)
+    LD A, B
+    ADD A, 64
+    CALL mem_rd
+    CALL push_w
+    JP vm_run
+
+.r1w:   ; ring1 write (slot 64+B)
+    PUSH BC
+    CALL pop_w
+    POP BC
+    LD A, B
+    ADD A, 64
+    JP mem_wr_run
+
+.gas:   ; consume gas (B = amount)
+    LD HL, (vm_gas)
+    LD C, B
+    LD B, 0
+    OR A
+    SBC HL, BC
+    LD (vm_gas), HL
+    BIT 7, H              ; check if negative
+    JP Z, vm_run
+    ; Gas exhausted — halt
+    RET
 
 ; ============================================================================
 ; Op table (32 entries, 0x00-0x1F)
@@ -674,6 +729,9 @@ op_store:
 
 op_print:
     CALL pop_w
+    LD A, (vm_mute)
+    OR A
+    RET NZ
     JP pr_s16
 
 op_inc:
@@ -770,6 +828,11 @@ mem_rd:
     LD D, (HL)
     RET
 
+; mem_wr_run: A = slot, DE = value, then continue VM loop
+mem_wr_run:
+    CALL mem_wr
+    JP vm_run
+
 ; mem_wr: A = slot, DE = value
 mem_wr:
     ADD A, A
@@ -786,6 +849,20 @@ mem_wr:
 ; Builtins
 ; ============================================================================
 do_builtin:
+    ; Check mute flag (for sandbox brain execution)
+    PUSH AF
+    LD A, (vm_mute)
+    OR A
+    JR Z, .bi_not_muted
+    POP AF
+    ; If muted, still need to pop arg for char print (builtin 2)
+    CP 2
+    JR NZ, .bi_mute_done
+    CALL pop_w
+.bi_mute_done:
+    RET
+.bi_not_muted:
+    POP AF
     OR A
     JR Z, .bi_nl
     CP 1 : JR Z, .bi_sp
@@ -996,6 +1073,8 @@ cmp_s:
 bc_pc:   DW BYTECODE        ; Bytecode program counter
 vm_sp:   DW VM_STACK        ; VM value stack pointer
 vm_retf: DB 0               ; Return flag
+vm_gas:  DW 0               ; Gas counter (0 = unlimited)
+vm_mute: DB 0               ; Mute print output (for sandbox)
 
 ; Temporaries
 t1: DW 0

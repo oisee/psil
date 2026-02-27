@@ -415,7 +415,8 @@ func (vm *VM) Step() error {
 	case op == OpHalt:
 		vm.Halted = true
 	case op == OpYield:
-		return nil // Just continue for now
+		vm.Halted = true
+		return nil
 	case op == OpEnd:
 		vm.Halted = true
 	case op == OpError:

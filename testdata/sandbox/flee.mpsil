@@ -1,0 +1,19 @@
+; Seed genome: Flee
+; Senses nearest NPC, moves North if close.
+;
+; Ring0 slot 4 = fear (nearest NPC distance)
+; Ring1 slot 0 = move direction (1=N)
+; Ring1 slot 1 = action (0=idle)
+
+; Read fear distance
+r0@ 4                   ; read Ring0 slot 4 (fear distance)
+
+; Always move North to flee
+1                       ; push 1 (North)
+r1! 0                   ; write to Ring1 move slot
+
+; No eat action
+0                       ; push 0 (idle)
+r1! 1                   ; write to Ring1 action slot
+
+yield

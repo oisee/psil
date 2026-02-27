@@ -465,22 +465,189 @@ The `z80/build/` directory contains ready-to-run binaries:
 
 See [micro-PSIL Design Report](reports/2026-01-11-001-micro-psil-bytecode-vm.md) and [MinZ Feasibility Analysis](reports/2026-01-11-002-micro-psil-on-minz-feasibility.md) for details.
 
+## NPC Sandbox: Evolving Bytecode Brains
+
+The theory from the sections above is now real. `pkg/sandbox` implements a complete genetic programming sandbox where a population of NPCs with bytecode genomes live in a 32x32 tile world, sense their environment through Ring0 sensors, make decisions by running their genome on the micro-PSIL VM, act on the world through Ring1 outputs, and evolve via genetic algorithms. The same simulation runs on both Go and Z80.
+
+### How It Works
+
+Each tick of the simulation:
+
+1. **Sense** - the world fills Ring0 slots with the NPC's sensor data (health, energy, hunger, nearest food distance, nearest enemy distance, position, day counter)
+2. **Think** - the NPC's bytecode genome runs on a fresh VM with a gas limit of 200 steps
+3. **Act** - the scheduler reads Ring1 outputs (move direction, action type) and applies them to the world
+4. **Decay** - energy drains each tick; when energy hits 0, health drains; when health hits 0, the NPC dies
+
+Every N ticks, the genetic algorithm kicks in: the bottom 25% of the population (by fitness) is replaced by offspring bred from the top 50% via tournament selection, instruction-aligned crossover, and one of six mutation operators.
+
+### Ring0 Sensors (read-only, filled by world)
+
+| Slot | Name | Meaning |
+|------|------|---------|
+| 0 | self | NPC ID |
+| 1 | health | current health (0-100) |
+| 2 | energy | current energy (0-200) |
+| 3 | hunger | ticks since last ate |
+| 4 | fear | nearest enemy distance |
+| 5 | food | nearest food distance |
+| 6 | danger | danger level |
+| 7 | near | nearest NPC distance |
+| 8 | x | X position |
+| 9 | y | Y position |
+| 10 | day | tick mod cycle |
+
+### Ring1 Actions (writable, read by scheduler)
+
+| Slot | Meaning | Values |
+|------|---------|--------|
+| 0 | move | 0=none, 1=N, 2=E, 3=S, 4=W |
+| 1 | action | 0=idle, 1=eat, 2=attack, 3=share |
+| 2 | target | target NPC ID |
+| 3 | emotion | emotional state |
+
+### Seed Genomes
+
+Three hand-written seed genomes in `testdata/sandbox/` demonstrate the sensor-action loop:
+
+**Forager** (9 bytes) - moves South, always eats:
+```asm
+r0@ 5       ; read food distance
+3           ; push 3 (South)
+r1! 0       ; write move direction
+1           ; push 1 (eat)
+r1! 1       ; write action
+yield
+```
+
+**Flee** (9 bytes) - moves North to escape:
+```asm
+r0@ 4       ; read fear distance
+1           ; push 1 (North)
+r1! 0       ; write move direction
+0           ; push 0 (idle)
+r1! 1       ; write action
+yield
+```
+
+**Random Walker** (12 bytes) - direction changes with the day counter:
+```asm
+r0@ 10      ; read day counter
+4           ; push 4
+mod         ; day mod 4
+1           ; push 1
++           ; +1 (directions are 1-4)
+r1! 0       ; write move direction
+1           ; push 1 (eat)
+r1! 1       ; write action
+yield
+```
+
+### Running the Go Sandbox
+
+```bash
+# Quick test (100 ticks, 10 NPCs)
+go run ./cmd/sandbox --npcs 10 --ticks 100 --seed 42 --verbose
+
+# Full evolution run (5000 ticks, 20 NPCs, evolve every 100 ticks)
+go run ./cmd/sandbox --npcs 20 --ticks 5000 --seed 42 --verbose
+
+# Minimal output (just final stats)
+go run ./cmd/sandbox --npcs 20 --ticks 5000 --seed 42
+```
+
+Example verbose output:
+```
+tick=0 alive=20 food=32 avg_fit=101 best_fit=101
+  best_genome=041f051039070c2447f104101a1b0e47f0f1642b4c00222df0
+tick=100 alive=20 food=32 avg_fit=143 best_fit=191
+  best_genome=041f051039070c2447f104101a1b0e47f0f1642b4c00222df0
+tick=200 alive=10 food=32 avg_fit=78 best_fit=195
+  best_genome=15021049384027f01d4d12146634011d1466523c4e0cf00335f13638131c5903560e442c351934571df0
+...
+tick=4900 alive=5 food=32 avg_fit=97 best_fit=199
+  best_genome=061d304f2243240f0d66f115084618f0
+
+=== Final Stats (tick 5000) ===
+alive=5 food_on_map=32 total_food_spawned=0
+best_fitness=199 best_age=99 best_food=0
+Best genome: 061d304f2243240f0d66f115084618f0
+```
+
+### Running the Z80 Sandbox
+
+The same simulation runs on the Z80 in 2,818 bytes of machine code:
+
+```bash
+# Assemble
+sjasmplus z80/sandbox.asm --raw=z80/build/sandbox.bin
+
+# Run (16 NPCs, 500 ticks, evolve every 128 ticks)
+mzx --run z80/build/sandbox.bin@8000 --console-io --frames DI:HALT
+```
+
+Z80 output:
+```
+NPC Sandbox Z80
+T=128 A=2
+T=256 A=0
+T=384 A=0
+Done
+```
+
+The Z80 version runs 16 NPCs on a 32x32 grid with a simplified GA (tournament-2 selection, point mutation). The entire sandbox — VM, scheduler, GA, world grid, NPC table — fits in under 3K of Z80 code.
+
+### Genetic Algorithm
+
+The GA engine (`pkg/sandbox/ga.go`) implements:
+
+- **Tournament selection**: pick 3 random NPCs, best fitness wins
+- **Instruction-aligned crossover**: walks both parent genomes opcode-by-opcode to find valid split points, then concatenates prefix of parent A with suffix of parent B
+- **Six mutation operators**:
+  1. Point mutation — replace one byte with a random valid opcode
+  2. Insert — add a random opcode at a random position
+  3. Delete — remove one byte (if genome > 16 bytes)
+  4. Constant tweak — find a small number (0x20-0x3F) and adjust by +/-1
+  5. Block swap — swap two instruction-aligned segments
+  6. Block duplicate — copy a short segment to another position
+
+Genome size is enforced between 16 and 64 bytes.
+
+### Cross-Validation
+
+The seed genomes are cross-validated between Go and Z80 VMs (`testdata/sandbox/crossval_test.go`). Both VMs produce identical Ring1 outputs for the same genome and Ring0 inputs, confirming bytecode compatibility.
+
+### Files
+
+| File | Description |
+|------|-------------|
+| `pkg/sandbox/world.go` | 32x32 tile world (food, walls, water) |
+| `pkg/sandbox/npc.go` | NPC struct, Ring0/Ring1 slot definitions |
+| `pkg/sandbox/scheduler.go` | Tick loop: sense, think, act, decay |
+| `pkg/sandbox/ga.go` | Genetic algorithm engine |
+| `pkg/sandbox/sandbox_test.go` | Unit tests (9 tests) |
+| `cmd/sandbox/main.go` | CLI runner with flags |
+| `z80/sandbox.asm` | Z80 sandbox (scheduler + world + NPC init) |
+| `z80/ga.asm` | Z80 GA (tournament-2, point mutation) |
+| `testdata/sandbox/*.mpsil` | Seed genomes (forager, flee, random) |
+| `testdata/sandbox/crossval_test.go` | Cross-validation tests |
+| `z80/build/sandbox.bin` | Prebuilt Z80 binary (2,818 bytes) |
+
 ## Architecture
 
 ```
-Source Code (.psil)          micro-PSIL (.mpsil)
-    |                              |
-    v                              v
-Parser (Participle v2)       Assembler (pkg/micro)
-    |                              |
-    v                              v
-AST (typed structs)          Bytecode (.bin)
-    |                              |
-    v                              v
-Go Interpreter               Z80 VM (1,552 bytes)
-    |                              |
-    v                              v
-REPL / Files                 mzx emulator / real hardware
+Source Code (.psil)          micro-PSIL (.mpsil)        Seed Genomes
+    |                              |                        |
+    v                              v                        v
+Parser (Participle v2)       Assembler (pkg/micro)     GA Engine
+    |                              |                   (pkg/sandbox/ga)
+    v                              v                        |
+AST (typed structs)          Bytecode (.bin)                v
+    |                              |                   NPC Sandbox
+    v                              v                   (pkg/sandbox)
+Go Interpreter               Z80 VM (1,552 bytes)          |
+    |                              |                   Sense → Think → Act → Evolve
+    v                              v                        |
+REPL / Files                 mzx emulator / real hw    Go + Z80
 ```
 
 ## Documentation
