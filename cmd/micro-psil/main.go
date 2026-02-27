@@ -269,8 +269,7 @@ func repl(debug bool, gas int) {
 }
 
 func printHelp() {
-	fmt.Println(`
-Commands:
+	fmt.Print(`Commands:
   quit     - Exit REPL
   stack    - Show stack
   clear    - Clear stack and reset
