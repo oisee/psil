@@ -311,9 +311,62 @@ The Z80 runs at 3.5 MHz with 48K of RAM. Every byte matters. A naive interpreter
 
 micro-PSIL's encoding is modeled on UTF-8. The most common operations — stack manipulation, small arithmetic, boolean tests — are single bytes. A complete NPC decision ("if health < 10 and enemy nearby, flee; else fight") compiles to **21 bytes** of bytecode plus quotation bodies. The entire VM core is **1,552 bytes** of Z80 machine code. That leaves ~45K for game data, maps, and hundreds of NPC behavior scripts.
 
-This matters for a specific use case: giving NPCs in retro-style games something resembling autonomous thought. Not scripted state machines, but compositional programs built from quotations, conditionals, and stack combinators. Each NPC carries a tiny program. The VM runs it, the NPC acts. The programs are so small they can be generated, mutated, or transmitted — a flock of agents each running their own 20-byte behavioral genome.
+### NPC Brains as Concatenative Programs
 
-The concatenative model is key. In a stack language, composition is concatenation — you glue programs together by putting one after the other. There are no variable binding headaches, no scope rules, no closures to heap-allocate. This maps directly to the Z80's sequential execution model. The VM's inner loop is essentially:
+The real motivation is AI for NPCs — not the modern neural-net kind, but something closer to what "artificial intelligence" meant in the 1980s: small programs that make creatures seem alive.
+
+In most retro games, NPC behavior is a hardcoded state machine: `IF health < 10 THEN flee`. The transitions are fixed at compile time. The designer writes every possible behavior. Nothing emerges.
+
+micro-PSIL changes this by making behavior *data*. Each NPC carries a bytecode program — its "brain." The VM runs the brain each tick, the NPC reads its sensors (health, enemy distance, hunger), the brain computes a decision, the NPC acts. Different NPCs can carry different programs. A cautious goblin's brain might be:
+
+```
+'health @ 10 < 'enemy @ and [flee] [patrol] ifte    ; 12 bytes
+```
+
+An aggressive one:
+
+```
+'enemy @ [charge] [wander] ifte                      ; 6 bytes
+```
+
+The concatenative model makes this unusually powerful because **composition is concatenation**. You don't need a compiler, linker, or symbol resolver to combine behaviors — you literally append bytecode arrays. Want a goblin that checks hunger *before* checking for enemies? Prepend a hunger-check snippet:
+
+```
+brain_a = 'hunger @ 20 > [eat] [...] ifte   ; hungry? eat first
+brain_b = 'enemy @ [charge] [wander] ifte   ; then fight or wander
+brain_ab = brain_a ++ brain_b               ; just concatenate the bytes
+```
+
+No variable conflicts. No calling conventions. No scope. The stack is the only interface between the two fragments, and stack effects are local and composable. This is a property unique to concatenative languages — in any applicative language (C, Lisp, Python), combining two code fragments requires managing shared names.
+
+### Genetic Programming on a Z80
+
+This composability opens the door to something that would be absurdly impractical in most languages: **genetic programming on the Z80 itself.**
+
+A bytecode brain is just a byte array. You can:
+
+- **Mutate** it: flip a random byte (change `+` to `*`, change a constant, swap a quotation ref)
+- **Crossover** two brains: take the first half of parent A and the second half of parent B
+- **Measure fitness**: run the brain in a simulated tick, see if the NPC survived, found food, or died
+
+Because the bytecode is well-formed at every granularity (every byte is either a complete instruction or a prefix that the VM knows how to skip), random mutations produce *valid programs* far more often than in tree-based representations. Single-byte instructions like `dup`, `swap`, `+`, `<` are atomic and self-contained. Even a completely random 20-byte sequence will execute without crashing — it might not do anything useful, but it won't segfault. The VM has a gas counter to prevent infinite loops.
+
+This means you could run a genetic algorithm *in-game, on the Z80*:
+
+1. A population of 20 NPCs, each with a 30-byte brain
+2. Every N ticks, score them (survived? found food? killed enemy?)
+3. Top 5 reproduce: crossover + mutation → 20 new brains
+4. Total memory: 20 × 30 = **600 bytes** for the entire population's genomes
+
+After a few generations, the NPCs evolve behaviors the designer never wrote. The cautious ones learn to flee. The aggressive ones learn to charge. Some discover strategies like "flee when hurt, charge when healthy" — emergent `ifte` patterns that arise from selection pressure, not from a programmer typing `if`.
+
+The entire genetic algorithm (selection, crossover, mutation, fitness evaluation) fits in maybe 200 bytes of Z80 code. The VM is already there. The bytecode programs *are* the genomes. There is no separate representation to maintain.
+
+This is the kind of thing that was theoretically possible in the 1980s but never practical because game behavior was written in assembly — you can't mutate Z80 machine code and expect anything but a crash. A bytecode VM creates exactly the abstraction layer needed: a safe, compact, composable representation that can be both executed and evolved.
+
+### The Inner Loop
+
+The concatenative model maps directly to the Z80's sequential execution. The VM's inner loop is:
 
 ```
 fetch:  LD A, (bc_pc) / INC bc_pc
