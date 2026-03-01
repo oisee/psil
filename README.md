@@ -661,12 +661,14 @@ See [`reports/`](reports/) for detailed design documentation:
 | [PSIL Design Rationale](reports/2026-01-10-001-psil-design-rationale.md) | Theoretical foundations and language design |
 | [micro-PSIL Bytecode VM](reports/2026-01-11-001-micro-psil-bytecode-vm.md) | Bytecode format, encoding, Z80 implementation |
 | [micro-PSIL on MinZ](reports/2026-01-11-002-micro-psil-on-minz-feasibility.md) | Feasibility analysis for MinZ compiler/VM |
+| [Emergent NPC Societies](reports/2026-03-01-001-emergent-npc-societies.md) | Trade, knowledge, memetics, and deception on concatenative bytecode |
 
-### Guides
+### Guides & Plans
 
-| Guide | Description |
-|-------|-------------|
+| Document | Description |
+|----------|-------------|
 | [ZX Spectrum Game Integration](docs/guide-zx-game-integration.md) | Integrating micro-PSIL NPC brains into ZX Spectrum games |
+| [Emergent Societies Genplan](docs/genplan-emergent-societies.md) | 8-phase implementation plan: Go first, then Z80 port |
 
 ### Architecture Decision Records
 
