@@ -2,6 +2,25 @@
 
 ## Changelog
 
+### Phase 5 — Temporal Statistics & Visualization (2026-03-01)
+
+Time-as-axis output for watching simulations unfold. ASCII sparklines, CSV export, matplotlib charts, and Mermaid diagrams — all from a single `--csv` flag.
+
+- **ASCII sparklines** — 12 metrics + 2 rate-of-change lines printed on every run, auto-fit to ~80 terminal columns
+- **CSV export** (`--csv`) — pipe-friendly output to stdout for gnuplot, pandas, matplotlib
+- **matplotlib charts** (`tools/plot_timeline.py`) — 6-panel PNG/PDF/SVG: population, economy, rates, resources, fitness, crafting
+- **Mermaid diagrams** (`tools/mermaid_timeline.py`) — GitHub-renderable `xychart-beta` blocks + system flowchart
+- **Guru leaderboard** — top 5 NPCs by teach count in final stats
+- **Delta rates** — `trades/t` and `teaches/t` sparklines reveal activity bursts vs steady-state
+
+Key findings from multi-scale temporal analysis (20 to 5,000 NPCs):
+- Trade per-capita rate stabilizes at ~1.6/1k ticks at scale (9x higher than 20-NPC village)
+- Stress follows a sawtooth synchronized with the 256-tick day cycle — only visible at 200+ NPCs
+- Guru NPCs (successful teachers) only emerge at 5,000+ NPCs
+- Population survival converges to ~27% across all scales above 200
+
+See [Temporal Dynamics](reports/2026-03-01-005-temporal-dynamics.md) for charts and analysis.
+
 ### Phase 4 — Decouple Tiles from Occupants, Scale to 10,000 NPCs (2026-03-01)
 
 The original tile encoding packed occupant ID in the high 4 bits, capping simulations at ~15 NPCs. Phase 4 removes this ceiling:
@@ -701,6 +720,42 @@ go run ./cmd/sandbox --npcs 100 --world 64 --ticks 5000 --seed 42
 
 The verbose output shows NPC table with stress, gold, items (including crafted shield/compass), forge (`F`) and crystal (`*`) tiles on the map, and scarcity-based trade pricing. World size defaults to auto-scale (`--world 0`); set explicitly to override.
 
+### Timeline & Visualization
+
+Every run prints ASCII sparklines showing how metrics evolve over time:
+
+```
+=== Timeline (sampled every 250 ticks, 80 points) ===
+alive       [1000→278]  █▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+trades      [23→31426]  ▁▁▁▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▃▃▃▃▃▃▃▃▃▃▃▃▄▄▄▄▄▄▄▄
+teaches     [1→16484]   ▁▁▁▁▁▁▁▁▁▁▁▁▁▂▂▂▂▂▂▂▂▂▂▂▃▃▃▃▃▃▃▃▃▃▃▃▄▄▄▄
+gold        [215→1279]  ▁▂▁▁▁▁▁▁▁▁▂▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁█▃▁▁▁▁▁▁
+stress      [0→4]       ▁▁▇▁▇▁▇▁▇▁▇▁▇▁▇▁▇▁▇▁▇▁▇▁▇▁▇▁▇▁▇▁▇▁█▁▇▁█
+```
+
+Export CSV data for detailed analysis with matplotlib or any plotting tool:
+
+```bash
+# CSV to stdout (sparklines still on stderr)
+go run ./cmd/sandbox --csv --npcs 1000 --ticks 20000 --seed 42 > data.csv
+
+# 6-panel matplotlib chart
+python3 tools/plot_timeline.py data.csv -o timeline.png
+
+# Mermaid diagrams for GitHub markdown
+python3 tools/mermaid_timeline.py data.csv --flowchart -o charts.md
+
+# Pipe directly — no temp files
+go run ./cmd/sandbox --csv --npcs 500 --ticks 10000 2>/dev/null \
+  | python3 tools/plot_timeline.py - -o chart.png
+```
+
+| 1,000 NPCs / 20k ticks | 5,000 NPCs / 5k ticks |
+|:-:|:-:|
+| ![1000 NPC Timeline](docs/images/sandbox/timeline-1000npcs.png) | ![5000 NPC Timeline](docs/images/sandbox/timeline-5000npcs.png) |
+
+At 1,000 NPCs: 31,993 trades, 16,642 teaches, stress sawteeth synchronized with the 256-tick day cycle. At 5,000 NPCs: 39,129 trades, 17,931 teaches, 9 guru NPCs emerge who successfully transmit genome fragments to students. See [Temporal Dynamics](reports/2026-03-01-005-temporal-dynamics.md) for the full analysis.
+
 ### Running the Z80 Sandbox
 
 The same simulation runs on the Z80 in 2,818 bytes of machine code:
@@ -791,6 +846,7 @@ See [`reports/`](reports/) for detailed design documentation:
 | [micro-PSIL on MinZ](reports/2026-01-11-002-micro-psil-on-minz-feasibility.md) | Feasibility analysis for MinZ compiler/VM |
 | [Emergent NPC Societies](reports/2026-03-01-001-emergent-npc-societies.md) | Trade, knowledge, memetics, and deception on concatenative bytecode |
 | [Scaling to 10,000 NPCs](reports/2026-03-01-004-scaling-10k-npcs.md) | Decoupled tiles, bounded search, auto-scale architecture |
+| [Temporal Dynamics](reports/2026-03-01-005-temporal-dynamics.md) | Multi-scale temporal analysis with charts: villages to metropolises |
 
 ### Guides & Plans
 

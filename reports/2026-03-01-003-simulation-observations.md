@@ -4,6 +4,7 @@
 **Config**: 20 NPCs, 32x32 world, 50k ticks, evolve every 100, gas=200
 **Seeds**: 42, 7, 1337, 999
 **Code version**: post Phase 1d (modifiers, crystal/gas, forge crafting, stress/pricing)
+**See also:** [Temporal Dynamics](2026-03-01-005-temporal-dynamics.md) for charts at 200-5,000 NPC scale
 
 ---
 

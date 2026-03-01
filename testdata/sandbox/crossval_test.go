@@ -196,6 +196,67 @@ func TestWarriorGenomeCrossValidation(t *testing.T) {
 	})
 }
 
+func TestTraderGenomeCrossValidation(t *testing.T) {
+	// Goal-based trader genome:
+	// r0@ 15, push 0, >, jnz +8,
+	//   forage: r0@ 13(food_dir), r1! 0, push 1, r1! 1, yield
+	//   trade:  r0@ 18(near_dir), r1! 0, push 4, r1! 1, r0@ 12(near_id), r1! 2, yield
+	genome := []byte{
+		0x8A, 0x0F, 0x20, 0x0D, 0x88, 0x08, // r0@ 15, push 0, >, jnz +8
+		0x8A, 0x0D, 0x8C, 0x00, 0x21, 0x8C, 0x01, 0xF1, // forage block (8 bytes)
+		0x8A, 0x12, 0x8C, 0x00, 0x24, 0x8C, 0x01, 0x8A, 0x0C, 0x8C, 0x02, 0xF1, // trade block
+	}
+
+	t.Run("forage", func(t *testing.T) {
+		vm := micro.New()
+		vm.Output = io.Discard
+		vm.MaxGas = 200
+		vm.Gas = 200
+		vm.MemWrite(13, 3) // food direction = 3 (South)
+		vm.MemWrite(15, 0) // my_item = 0 (no item)
+		vm.Load(genome)
+		vm.Run()
+
+		move := vm.MemRead(64 + 0)
+		action := vm.MemRead(64 + 1)
+		fmt.Printf("Trader(item=0,food_dir=3): Ring1[move]=%d Ring1[action]=%d\n", move, action)
+
+		if move != 3 {
+			t.Errorf("expected move=3 (South/toward food), got %d", move)
+		}
+		if action != 1 {
+			t.Errorf("expected action=1 (eat), got %d", action)
+		}
+	})
+
+	t.Run("trade", func(t *testing.T) {
+		vm := micro.New()
+		vm.Output = io.Discard
+		vm.MaxGas = 200
+		vm.Gas = 200
+		vm.MemWrite(12, 7) // nearest NPC ID = 7
+		vm.MemWrite(15, 2) // my_item = 2 (holding tool)
+		vm.MemWrite(18, 1) // nearest NPC direction = 1 (North)
+		vm.Load(genome)
+		vm.Run()
+
+		move := vm.MemRead(64 + 0)
+		action := vm.MemRead(64 + 1)
+		target := vm.MemRead(64 + 2)
+		fmt.Printf("Trader(item=2,near_dir=1,near_id=7): Ring1[move]=%d Ring1[action]=%d Ring1[target]=%d\n", move, action, target)
+
+		if move != 1 {
+			t.Errorf("expected move=1 (North/toward NPC), got %d", move)
+		}
+		if action != 4 {
+			t.Errorf("expected action=4 (trade), got %d", action)
+		}
+		if target != 7 {
+			t.Errorf("expected target=7 (nearest NPC ID), got %d", target)
+		}
+	})
+}
+
 func TestRandomGenomeCrossValidation(t *testing.T) {
 	// random genome: r0@ 10, push 4, mod, push 1, +, r1! 0, push 1, r1! 1, yield
 	genome := []byte{0x8A, 0x0A, 0x24, 0x0A, 0x21, 0x06, 0x8C, 0x00, 0x21, 0x8C, 0x01, 0xF1}

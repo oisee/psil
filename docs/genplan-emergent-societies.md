@@ -1,6 +1,6 @@
 # Implementation Plan: Emergent NPC Societies
 
-**Status:** In Progress (Phases 1-1d DONE, Phase 3 DONE, Phase 4 DONE)
+**Status:** In Progress (Phases 1-1d DONE, Phase 3 DONE, Phase 4 DONE, Phase 5 DONE)
 **Report:** [Emergent NPC Societies](../reports/2026-03-01-001-emergent-npc-societies.md)
 **Principle:** Go first (host machine), then Z80 port. Each phase is testable and demoable independently.
 

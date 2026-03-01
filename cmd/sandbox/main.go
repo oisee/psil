@@ -1,15 +1,34 @@
 package main
 
 import (
+	"encoding/csv"
 	"flag"
 	"fmt"
 	"io"
 	"math"
 	"math/rand"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/psilLang/psil/pkg/sandbox"
 )
+
+type timePoint struct {
+	tick        int
+	alive       int
+	trades      int // cumulative
+	teaches     int // cumulative
+	gold        int // total across alive NPCs
+	avgStress   int // 0-100
+	food        int // on map
+	items       int // on map
+	avgFit      int
+	bestFit     int
+	holders     int // NPCs with items
+	crafted     int // shield+compass holders
+	crystalNPCs int
+}
 
 // Trader genome: goal-based navigation
 // If holding item → move toward nearest NPC, trade with them
@@ -128,6 +147,8 @@ func main() {
 	verbose := flag.Bool("verbose", false, "verbose output")
 	traderFrac := flag.Float64("traders", 0.25, "fraction of initial population seeded with trader genome")
 	snapEvery := flag.Int("snap-every", 0, "print spatial snapshot every N ticks (0=off)")
+	timelineEvery := flag.Int("timeline", 0, "sample stats every N ticks for sparkline chart (0=auto ~80 cols)")
+	csvOut := flag.Bool("csv", false, "output timeline as CSV to stdout")
 	flag.Parse()
 
 	rng := rand.New(rand.NewSource(*seed))
@@ -213,8 +234,23 @@ func main() {
 		reportInterval = 100
 	}
 
+	// Timeline sampling interval
+	tlEvery := *timelineEvery
+	if tlEvery <= 0 {
+		tlEvery = *ticks / 80
+		if tlEvery < 1 {
+			tlEvery = 1
+		}
+	}
+	var timeline []timePoint
+
 	for tick := 0; tick < *ticks; tick++ {
 		sched.Tick()
+
+		// Timeline sampling
+		if tick%tlEvery == 0 {
+			timeline = append(timeline, sampleStats(w, sched, tick))
+		}
 
 		// Evolution
 		if tick > 0 && tick%*evolveEvery == 0 {
@@ -321,15 +357,59 @@ func main() {
 	}
 	fmt.Fprintln(os.Stderr)
 
+	// Guru leaderboard — top teachers by TeachCount
+	type guru struct {
+		id         uint16
+		teachCount int
+		age        int
+		fitness    int
+	}
+	var gurus []guru
+	for _, npc := range w.NPCs {
+		if npc.TeachCount > 0 {
+			gurus = append(gurus, guru{npc.ID, npc.TeachCount, npc.Age, npc.Fitness})
+		}
+	}
+	if len(gurus) > 0 {
+		// Sort descending by teach count (simple selection for top 5)
+		for i := 0; i < len(gurus) && i < 5; i++ {
+			best := i
+			for j := i + 1; j < len(gurus); j++ {
+				if gurus[j].teachCount > gurus[best].teachCount {
+					best = j
+				}
+			}
+			gurus[i], gurus[best] = gurus[best], gurus[i]
+		}
+		n := len(gurus)
+		if n > 5 {
+			n = 5
+		}
+		fmt.Fprintf(os.Stderr, "gurus (%d teachers): ", len(gurus))
+		for i := 0; i < n; i++ {
+			g := gurus[i]
+			fmt.Fprintf(os.Stderr, "NPC#%d(%dx,age=%d,fit=%d) ", g.id, g.teachCount, g.age, g.fitness)
+		}
+		fmt.Fprintln(os.Stderr)
+	}
+
 	if bestNPC != nil {
 		fmt.Fprintf(os.Stderr, "best: fitness=%d age=%d food=%d gold=%d item=%d stress=%d gas_bonus=%d\n",
 			bestNPC.Fitness, bestNPC.Age, bestNPC.FoodEaten, bestNPC.Gold, bestNPC.Item,
 			bestNPC.Stress, bestNPC.ModSum(sandbox.ModGas))
-		fmt.Printf("Best genome: ")
+		fmt.Fprintf(os.Stderr, "Best genome: ")
 		for _, b := range bestNPC.Genome {
-			fmt.Printf("%02x", b)
+			fmt.Fprintf(os.Stderr, "%02x", b)
 		}
-		fmt.Println()
+		fmt.Fprintln(os.Stderr)
+	}
+
+	// Timeline output
+	if *csvOut {
+		printCSV(timeline, os.Stdout)
+	}
+	if len(timeline) > 1 {
+		printTimeline(timeline, tlEvery)
 	}
 
 	// Final snapshot
@@ -502,4 +582,157 @@ func centroid(npcs []*sandbox.NPC) (int, int) {
 		sy += n.Y
 	}
 	return sx / len(npcs), sy / len(npcs)
+}
+
+func sampleStats(w *sandbox.World, sched *sandbox.Scheduler, tick int) timePoint {
+	tp := timePoint{
+		tick:   tick,
+		trades: sched.TradeCount,
+		teaches: sched.TeachCount,
+		food:   w.FoodCount(),
+		items:  w.ItemCount(),
+	}
+	totalFit := 0
+	totalStress := 0
+	for _, npc := range w.NPCs {
+		if !npc.Alive() {
+			continue
+		}
+		tp.alive++
+		totalFit += npc.Fitness
+		tp.gold += npc.Gold
+		totalStress += npc.Stress
+		if npc.Fitness > tp.bestFit {
+			tp.bestFit = npc.Fitness
+		}
+		if npc.Item != sandbox.ItemNone {
+			tp.holders++
+		}
+		if npc.Item == sandbox.ItemShield || npc.Item == sandbox.ItemCompass {
+			tp.crafted++
+		}
+		if npc.ModSum(sandbox.ModGas) > 0 {
+			tp.crystalNPCs++
+		}
+	}
+	if tp.alive > 0 {
+		tp.avgFit = totalFit / tp.alive
+		tp.avgStress = totalStress / tp.alive
+	}
+	return tp
+}
+
+func sparkline(label string, values []int) string {
+	blocks := []rune("▁▂▃▄▅▆▇█")
+	n := len(values)
+	if n == 0 {
+		return ""
+	}
+
+	lo, hi := values[0], values[0]
+	for _, v := range values {
+		if v < lo {
+			lo = v
+		}
+		if v > hi {
+			hi = v
+		}
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "%-11s [%d→%d]\t", label, values[0], values[n-1])
+
+	span := hi - lo
+	for _, v := range values {
+		idx := 0
+		if span > 0 {
+			idx = (v - lo) * (len(blocks) - 1) / span
+		}
+		sb.WriteRune(blocks[idx])
+	}
+	return sb.String()
+}
+
+func deltas(values []int) []int {
+	if len(values) < 2 {
+		return nil
+	}
+	d := make([]int, len(values)-1)
+	for i := 1; i < len(values); i++ {
+		d[i-1] = values[i] - values[i-1]
+		if d[i-1] < 0 {
+			d[i-1] = 0
+		}
+	}
+	return d
+}
+
+func extractField(timeline []timePoint, fn func(timePoint) int) []int {
+	vals := make([]int, len(timeline))
+	for i, tp := range timeline {
+		vals[i] = fn(tp)
+	}
+	return vals
+}
+
+func printTimeline(timeline []timePoint, interval int) {
+	fmt.Fprintf(os.Stderr, "\n=== Timeline (sampled every %d ticks, %d points) ===\n",
+		interval, len(timeline))
+
+	type metric struct {
+		label string
+		fn    func(timePoint) int
+		rate  bool // show delta/interval sparkline too
+	}
+	metrics := []metric{
+		{"alive", func(tp timePoint) int { return tp.alive }, false},
+		{"trades", func(tp timePoint) int { return tp.trades }, true},
+		{"teaches", func(tp timePoint) int { return tp.teaches }, true},
+		{"gold", func(tp timePoint) int { return tp.gold }, false},
+		{"stress", func(tp timePoint) int { return tp.avgStress }, false},
+		{"food", func(tp timePoint) int { return tp.food }, false},
+		{"items", func(tp timePoint) int { return tp.items }, false},
+		{"avgFit", func(tp timePoint) int { return tp.avgFit }, false},
+		{"bestFit", func(tp timePoint) int { return tp.bestFit }, false},
+		{"holders", func(tp timePoint) int { return tp.holders }, false},
+		{"crafted", func(tp timePoint) int { return tp.crafted }, false},
+		{"crystalNPC", func(tp timePoint) int { return tp.crystalNPCs }, false},
+	}
+
+	for _, m := range metrics {
+		vals := extractField(timeline, m.fn)
+		fmt.Fprintln(os.Stderr, sparkline(m.label, vals))
+		if m.rate {
+			d := deltas(vals)
+			if len(d) > 0 {
+				fmt.Fprintln(os.Stderr, sparkline(m.label+"/t", d))
+			}
+		}
+	}
+}
+
+func printCSV(timeline []timePoint, w io.Writer) {
+	cw := csv.NewWriter(w)
+	cw.Write([]string{
+		"tick", "alive", "trades", "teaches", "gold", "avg_stress",
+		"food", "items", "avg_fit", "best_fit", "holders", "crafted", "crystal_npcs",
+	})
+	for _, tp := range timeline {
+		cw.Write([]string{
+			strconv.Itoa(tp.tick),
+			strconv.Itoa(tp.alive),
+			strconv.Itoa(tp.trades),
+			strconv.Itoa(tp.teaches),
+			strconv.Itoa(tp.gold),
+			strconv.Itoa(tp.avgStress),
+			strconv.Itoa(tp.food),
+			strconv.Itoa(tp.items),
+			strconv.Itoa(tp.avgFit),
+			strconv.Itoa(tp.bestFit),
+			strconv.Itoa(tp.holders),
+			strconv.Itoa(tp.crafted),
+			strconv.Itoa(tp.crystalNPCs),
+		})
+	}
+	cw.Flush()
 }
