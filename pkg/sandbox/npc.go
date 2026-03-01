@@ -108,7 +108,7 @@ var ItemModifiers = map[byte]Modifier{
 
 // NPC represents a creature in the sandbox world.
 type NPC struct {
-	ID      byte
+	ID      uint16
 	X, Y    int
 	Health  int
 	Energy  int

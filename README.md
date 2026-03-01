@@ -2,6 +2,23 @@
 
 ## Changelog
 
+### Phase 4 — Decouple Tiles from Occupants, Scale to 10,000 NPCs (2026-03-01)
+
+The original tile encoding packed occupant ID in the high 4 bits, capping simulations at ~15 NPCs. Phase 4 removes this ceiling:
+
+- **Tiles = pure terrain** — `Tile byte` uses all 8 bits for type (256 possible). `MakeTile(typ)` takes one arg. `Occupant()` deleted.
+- **Separate occupancy grid** — `OccGrid []uint16` parallel to Grid. `OccAt()` / `SetOcc()` / `ClearOcc()` for movement and collision.
+- **NPC.ID = uint16** — monotonically increasing, 65535 max. No wrapping or reuse.
+- **O(1) NPC lookup** — `npcByID map[uint16]*NPC` replaces linear scans for target resolution, trade matching, and findNPC.
+- **Cached tile counts** — `foodCount` / `itemCount` maintained by `SetTile()`, eliminating full-grid scans.
+- **Bounded Manhattan ring search** — all `Nearest*` functions expand outward (radius 0-31, ~25 cells for typical hit) instead of scanning the full grid.
+- **Combined NPC sensor** — `NearestNPCFull()` returns distance+ID+direction in one scan, eliminating 3x duplicate scans per NPC.
+- **Auto-scale world** — `AutoWorldSize(npcs) = max(32, sqrt(npcs)*4)`. Default `--world 0` triggers auto-sizing. Maintains ~6% density at all scales.
+- **Resource scaling** — `MaxFood = npcs*3`, `MaxItems = max(npcs/2, 4)`.
+- **Cluster analysis skip** — O(n^2) clustering guarded with population > 500.
+
+Performance: 100 NPCs in 3.5s, 1000 NPCs in 41s, 10000 NPCs completes without crash. Trades and teaches occur at all scales. See [Scaling to 10,000 NPCs](reports/2026-03-01-004-scaling-10k-npcs.md).
+
 ### Phase 3 — Max Age, Hazards, and Memetic Transmission (2026-03-01)
 
 500k-tick simulations revealed **frozen evolution** — the best NPC lived 137k ticks, forager monoculture dominated all seeds, and trade was a one-shot event. Phase 3 breaks the stasis:
@@ -532,7 +549,7 @@ See [micro-PSIL Design Report](reports/2026-01-11-001-micro-psil-bytecode-vm.md)
 
 ## NPC Sandbox: Evolving Bytecode Brains
 
-The theory from the sections above is now real. `pkg/sandbox` implements a complete genetic programming sandbox where a population of NPCs with bytecode genomes live in a 32x32 tile world, sense their environment through Ring0 sensors, make decisions by running their genome on the micro-PSIL VM, act on the world through Ring1 outputs, and evolve via genetic algorithms. The same simulation runs on both Go and Z80.
+The theory from the sections above is now real. `pkg/sandbox` implements a complete genetic programming sandbox where a population of NPCs with bytecode genomes live in an auto-scaled tile world (32x32 to 400x400, ~6% density), sense their environment through Ring0 sensors, make decisions by running their genome on the micro-PSIL VM, act on the world through Ring1 outputs, and evolve via genetic algorithms. Scales from 20 to 10,000+ NPCs. The same simulation runs on both Go and Z80.
 
 ### How It Works
 
@@ -565,20 +582,27 @@ Every N ticks, the GA replaces the bottom 25% with offspring from the top 50% vi
 | 8 | x | X position |
 | 9 | y | Y position |
 | 10 | day | tick mod cycle |
-| 11-12 | near_id, food_dir | nearest NPC ID, food direction |
-| 13-14 | my_gold, my_item | gold count, held item type |
-| 15-16 | near_item, near_trust | nearest item distance, trust (stub) |
-| 17-19 | near_dir, item_dir, rng | NPC direction, item direction, random 0-31 |
-| 20 | stress | current stress (0-100) |
-| 21 | my_gas | effective gas (base + crystal bonuses) |
-| 22 | on_forge | 1 if standing on forge tile |
+| 12 | near_id | nearest NPC ID |
+| 13 | food_dir | direction toward nearest food |
+| 14 | my_gold | gold count |
+| 15 | my_item | held item type |
+| 16 | near_item | nearest item distance |
+| 17 | near_trust | trust (stub) |
+| 18 | near_dir | direction toward nearest NPC |
+| 19 | item_dir | direction toward nearest item |
+| 20 | rng | per-NPC random 0-31 |
+| 21 | stress | current stress (0-100) |
+| 22 | my_gas | effective gas (base + crystal bonuses) |
+| 23 | on_forge | 1 if standing on forge tile |
+| 24 | my_age | remaining life (MaxAge - age) |
+| 25 | taught | times genome was modified by others |
 
 ### Ring1 Actions (writable, read by scheduler)
 
 | Slot | Meaning | Values |
 |------|---------|--------|
 | 0 | move | 0=none, 1=N, 2=E, 3=S, 4=W |
-| 1 | action | 0=idle, 1=eat, 2=attack, 3=share, 4=trade, 5=craft |
+| 1 | action | 0=idle, 1=eat, 2=attack, 3=share, 4=trade, 5=craft, 6=teach |
 | 2 | target | target NPC ID |
 | 3 | emotion | emotional state |
 
@@ -657,7 +681,7 @@ yield
 ### Running the Go Sandbox
 
 ```bash
-# Quick test (100 ticks, 10 NPCs)
+# Quick test (100 ticks, 10 NPCs, auto-sized 32x32 world)
 go run ./cmd/sandbox --npcs 10 --ticks 100 --seed 42 --verbose
 
 # Full evolution run with economy (10k ticks, 20 NPCs)
@@ -665,9 +689,17 @@ go run ./cmd/sandbox --npcs 20 --ticks 10000 --seed 42 --verbose
 
 # With spatial snapshots showing forge/crystal tiles
 go run ./cmd/sandbox --npcs 20 --ticks 10000 --seed 42 --verbose --snap-every 2500
+
+# Scale series (auto-sized worlds)
+go run ./cmd/sandbox --npcs 100 --ticks 10000 --seed 42    # 40x40 world, ~3.5s
+go run ./cmd/sandbox --npcs 1000 --ticks 10000 --seed 42   # 128x128 world, ~41s
+go run ./cmd/sandbox --npcs 10000 --ticks 1000 --seed 42   # 400x400 world, ~69s
+
+# Fixed world size (override auto-scale)
+go run ./cmd/sandbox --npcs 100 --world 64 --ticks 5000 --seed 42
 ```
 
-The verbose output shows NPC table with stress, gold, items (including crafted shield/compass), forge (`F`) and crystal (`*`) tiles on the map, and scarcity-based trade pricing.
+The verbose output shows NPC table with stress, gold, items (including crafted shield/compass), forge (`F`) and crystal (`*`) tiles on the map, and scarcity-based trade pricing. World size defaults to auto-scale (`--world 0`); set explicitly to override.
 
 ### Running the Z80 Sandbox
 
@@ -716,11 +748,11 @@ The seed genomes are cross-validated between Go and Z80 VMs (`testdata/sandbox/c
 
 | File | Description |
 |------|-------------|
-| `pkg/sandbox/world.go` | 32x32 tile world (food, walls, water) |
+| `pkg/sandbox/world.go` | Auto-scaled tile world, OccGrid, bounded search |
 | `pkg/sandbox/npc.go` | NPC struct, Ring0/Ring1 slot definitions |
 | `pkg/sandbox/scheduler.go` | Tick loop: sense, think, act, decay |
 | `pkg/sandbox/ga.go` | Genetic algorithm engine |
-| `pkg/sandbox/sandbox_test.go` | Unit + e2e tests (42+ tests) |
+| `pkg/sandbox/sandbox_test.go` | Unit + e2e + scaling tests (36+ tests) |
 | `cmd/sandbox/main.go` | CLI runner with flags |
 | `z80/sandbox.asm` | Z80 sandbox (scheduler + world + NPC init) |
 | `z80/ga.asm` | Z80 GA (tournament-2, point mutation) |
@@ -758,6 +790,7 @@ See [`reports/`](reports/) for detailed design documentation:
 | [micro-PSIL Bytecode VM](reports/2026-01-11-001-micro-psil-bytecode-vm.md) | Bytecode format, encoding, Z80 implementation |
 | [micro-PSIL on MinZ](reports/2026-01-11-002-micro-psil-on-minz-feasibility.md) | Feasibility analysis for MinZ compiler/VM |
 | [Emergent NPC Societies](reports/2026-03-01-001-emergent-npc-societies.md) | Trade, knowledge, memetics, and deception on concatenative bytecode |
+| [Scaling to 10,000 NPCs](reports/2026-03-01-004-scaling-10k-npcs.md) | Decoupled tiles, bounded search, auto-scale architecture |
 
 ### Guides & Plans
 

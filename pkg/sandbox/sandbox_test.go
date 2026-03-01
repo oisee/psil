@@ -23,12 +23,14 @@ func TestWorldCreation(t *testing.T) {
 }
 
 func TestTilePackUnpack(t *testing.T) {
-	tile := MakeTile(TileFood, 5)
+	tile := MakeTile(TileFood)
 	if tile.Type() != TileFood {
 		t.Errorf("type: got %d want %d", tile.Type(), TileFood)
 	}
-	if tile.Occupant() != 5 {
-		t.Errorf("occupant: got %d want 5", tile.Occupant())
+	// All 8 bits are type now (no occupant encoding)
+	tile2 := MakeTile(TileForge)
+	if tile2.Type() != TileForge {
+		t.Errorf("type: got %d want %d", tile2.Type(), TileForge)
 	}
 }
 
@@ -42,9 +44,8 @@ func TestNPCSpawn(t *testing.T) {
 	if npc.ID == 0 {
 		t.Fatal("NPC should have non-zero ID")
 	}
-	tile := w.TileAt(npc.X, npc.Y)
-	if tile.Occupant() != npc.ID {
-		t.Errorf("tile occupant %d != NPC ID %d", tile.Occupant(), npc.ID)
+	if w.OccAt(npc.X, npc.Y) != npc.ID {
+		t.Errorf("OccGrid occupant %d != NPC ID %d", w.OccAt(npc.X, npc.Y), npc.ID)
 	}
 }
 
@@ -88,7 +89,7 @@ func TestFoodEating(t *testing.T) {
 	w.Spawn(npc)
 
 	// Place food adjacent
-	w.SetTile(5, 4, MakeTile(TileFood, 0))
+	w.SetTile(5, 4, MakeTile(TileFood))
 
 	startEnergy := npc.Energy
 	sched.Tick()
@@ -152,8 +153,8 @@ func Test100TickSimulation(t *testing.T) {
 	for i := 0; i < 16; i++ {
 		x := rng.Intn(16)
 		y := rng.Intn(16)
-		if w.TileAt(x, y).Type() == TileEmpty && w.TileAt(x, y).Occupant() == 0 {
-			w.SetTile(x, y, MakeTile(TileFood, 0))
+		if w.TileAt(x, y).Type() == TileEmpty && w.OccAt(x, y) == 0 {
+			w.SetTile(x, y, MakeTile(TileFood))
 		}
 	}
 
@@ -190,7 +191,7 @@ func TestItemPickup(t *testing.T) {
 	w.Spawn(npc)
 
 	// Place TileTool at (5,4) — one tile North
-	w.SetTile(5, 4, MakeTile(TileTool, 0))
+	w.SetTile(5, 4, MakeTile(TileTool))
 
 	sched.Tick()
 
@@ -547,7 +548,7 @@ func TestCrystalPickupGrantsGas(t *testing.T) {
 	w.Spawn(npc)
 
 	// Place crystal at (5,4)
-	w.SetTile(5, 4, MakeTile(TileCrystal, 0))
+	w.SetTile(5, 4, MakeTile(TileCrystal))
 
 	sched.Tick()
 
@@ -601,7 +602,7 @@ func TestItemModifierOnPickup(t *testing.T) {
 	w.Spawn(npc)
 
 	// Place tool at (5,4)
-	w.SetTile(5, 4, MakeTile(TileTool, 0))
+	w.SetTile(5, 4, MakeTile(TileTool))
 
 	sched.Tick()
 
@@ -684,7 +685,7 @@ func TestSoloCraftToolToCompass(t *testing.T) {
 	sched := NewScheduler(w, 200, io.Discard)
 
 	// Place forge at (5,5) — clear any existing forge first
-	w.SetTile(5, 5, MakeTile(TileForge, 0))
+	w.SetTile(5, 5, MakeTile(TileForge))
 
 	// Genome: ActionCraft (5) written to Ring1 action
 	genome := []byte{
@@ -718,7 +719,7 @@ func TestSoloCraftWeaponToShield(t *testing.T) {
 	w := NewWorld(16, rng)
 	sched := NewScheduler(w, 200, io.Discard)
 
-	w.SetTile(5, 5, MakeTile(TileForge, 0))
+	w.SetTile(5, 5, MakeTile(TileForge))
 
 	genome := []byte{
 		micro.SmallNumOp(5),
@@ -751,7 +752,7 @@ func TestPortableCraftOffForge(t *testing.T) {
 	sched := NewScheduler(w, 200, io.Discard)
 
 	// NPC on empty tile, not forge
-	w.SetTile(5, 5, MakeTile(TileEmpty, 0))
+	w.SetTile(5, 5, MakeTile(TileEmpty))
 
 	genome := []byte{
 		micro.SmallNumOp(5),
@@ -786,7 +787,7 @@ func TestPortableCraftInsufficientEnergy(t *testing.T) {
 	w := NewWorld(16, rng)
 	sched := NewScheduler(w, 200, io.Discard)
 
-	w.SetTile(5, 5, MakeTile(TileEmpty, 0))
+	w.SetTile(5, 5, MakeTile(TileEmpty))
 
 	genome := []byte{
 		micro.SmallNumOp(5),
@@ -812,7 +813,7 @@ func TestCraftInvalidItem(t *testing.T) {
 	w := NewWorld(16, rng)
 	sched := NewScheduler(w, 200, io.Discard)
 
-	w.SetTile(5, 5, MakeTile(TileForge, 0))
+	w.SetTile(5, 5, MakeTile(TileForge))
 
 	genome := []byte{
 		micro.SmallNumOp(5),
@@ -965,7 +966,7 @@ func TestStressDecayFromEating(t *testing.T) {
 	w.Spawn(npc)
 
 	// Place food adjacent
-	w.SetTile(5, 4, MakeTile(TileFood, 0))
+	w.SetTile(5, 4, MakeTile(TileFood))
 
 	sched.Tick()
 
@@ -1066,8 +1067,8 @@ func TestE2E50kTickSimulation(t *testing.T) {
 	for i := 0; i < 32; i++ {
 		x := rng.Intn(32)
 		y := rng.Intn(32)
-		if w.TileAt(x, y).Type() == TileEmpty && w.TileAt(x, y).Occupant() == 0 {
-			w.SetTile(x, y, MakeTile(TileFood, 0))
+		if w.TileAt(x, y).Type() == TileEmpty && w.OccAt(x, y) == 0 {
+			w.SetTile(x, y, MakeTile(TileFood))
 		}
 	}
 
@@ -1237,7 +1238,7 @@ func TestAutoCraftOnForge(t *testing.T) {
 	sched := NewScheduler(w, 200, io.Discard)
 
 	// Place forge at NPC position
-	w.SetTile(5, 5, MakeTile(TileForge, 0))
+	w.SetTile(5, 5, MakeTile(TileForge))
 
 	// Genome: idle (no craft action) — auto-craft should handle it
 	genome := []byte{micro.OpHalt}
@@ -1304,7 +1305,7 @@ func TestForagingRadiusWithTool(t *testing.T) {
 	w.Spawn(npc)
 
 	// Place food 2 tiles away (distance 2, within radius 2)
-	w.SetTile(7, 5, MakeTile(TileFood, 0))
+	w.SetTile(7, 5, MakeTile(TileFood))
 
 	sched.Tick()
 
@@ -1328,7 +1329,7 @@ func TestForagingRadiusWithoutTool(t *testing.T) {
 	w.Spawn(npc)
 
 	// Place food 2 tiles away (distance 2, outside radius 1)
-	w.SetTile(7, 5, MakeTile(TileFood, 0))
+	w.SetTile(7, 5, MakeTile(TileFood))
 
 	sched.Tick()
 
@@ -1345,7 +1346,7 @@ func TestGoldInheritance(t *testing.T) {
 	npcs := make([]*NPC, 4)
 	for i := range npcs {
 		npcs[i] = NewNPC(ga.RandomGenome(24))
-		npcs[i].ID = byte(i + 1)
+		npcs[i].ID = uint16(i + 1)
 		npcs[i].Health = 100
 	}
 
@@ -1456,7 +1457,7 @@ func TestPoisonTileDamage(t *testing.T) {
 	w.Spawn(npc)
 
 	// Place poison at (5,4) — one tile North
-	w.SetTile(5, 4, MakeTile(TilePoison, 0))
+	w.SetTile(5, 4, MakeTile(TilePoison))
 	w.PoisonTTL[w.Size*4+5] = w.Tick
 
 	startHealth := npc.Health
@@ -1487,7 +1488,7 @@ func TestBlightDestroysFood(t *testing.T) {
 	for y := 0; y < 16 && placed < 20; y++ {
 		for x := 0; x < 16 && placed < 20; x++ {
 			if w.TileAt(x, y).Type() == TileEmpty {
-				w.SetTile(x, y, MakeTile(TileFood, 0))
+				w.SetTile(x, y, MakeTile(TileFood))
 				placed++
 			}
 		}
@@ -1652,7 +1653,7 @@ func TestDangerSensorReportsPoison(t *testing.T) {
 	w.Spawn(npc)
 
 	// Place poison 3 tiles away
-	w.SetTile(8, 5, MakeTile(TilePoison, 0))
+	w.SetTile(8, 5, MakeTile(TilePoison))
 	w.PoisonTTL[w.Size*5+8] = w.Tick
 
 	// Run sense to populate sensors
@@ -1731,7 +1732,7 @@ func TestAgedNPCReplacedInEvolve(t *testing.T) {
 	npcs := make([]*NPC, 8)
 	for i := range npcs {
 		npcs[i] = NewNPC(ga.RandomGenome(24))
-		npcs[i].ID = byte(i + 1)
+		npcs[i].ID = uint16(i + 1)
 		npcs[i].Health = 100
 		npcs[i].Fitness = (i + 1) * 100 // ascending fitness
 	}
@@ -1750,4 +1751,68 @@ func TestAgedNPCReplacedInEvolve(t *testing.T) {
 	if npcs[7].Fitness != 0 {
 		t.Errorf("replaced NPC should have fitness=0, got %d", npcs[7].Fitness)
 	}
+}
+
+func TestScaling100NPCs(t *testing.T) {
+	rng := rand.New(rand.NewSource(42))
+	ws := AutoWorldSize(100) // should be ~40
+	w := NewWorld(ws, rng)
+	w.MaxFood = 300
+	w.FoodRate = 0.5
+	w.MaxItems = 50
+	ga := NewGA(rng)
+	sched := NewScheduler(w, 200, io.Discard)
+
+	foragerGenome := []byte{
+		0x8A, 0x0D, 0x8C, 0x00, 0x21, 0x8C, 0x01, 0xF1,
+	}
+
+	// Spawn 100 NPCs
+	for i := 0; i < 100; i++ {
+		var genome []byte
+		if i%2 == 0 {
+			genome = make([]byte, len(foragerGenome))
+			copy(genome, foragerGenome)
+		} else {
+			genome = ga.RandomGenome(24 + rng.Intn(16))
+		}
+		npc := NewNPC(genome)
+		npc.X = rng.Intn(ws)
+		npc.Y = rng.Intn(ws)
+		w.Spawn(npc)
+	}
+
+	// Seed food
+	for i := 0; i < ws*2; i++ {
+		x := rng.Intn(ws)
+		y := rng.Intn(ws)
+		if w.TileAt(x, y).Type() == TileEmpty && w.OccAt(x, y) == 0 {
+			w.SetTile(x, y, MakeTile(TileFood))
+		}
+	}
+
+	// Run 5000 ticks with evolution
+	for tick := 0; tick < 5000; tick++ {
+		sched.Tick()
+		if tick > 0 && tick%100 == 0 {
+			w.NPCs = ga.Evolve(w.NPCs)
+			// Respawn if needed
+			for len(w.NPCs) < 50 {
+				genome := ga.RandomGenome(24)
+				npc := NewNPC(genome)
+				npc.X = rng.Intn(ws)
+				npc.Y = rng.Intn(ws)
+				w.Spawn(npc)
+			}
+		}
+		if len(w.NPCs) == 0 {
+			t.Fatalf("population extinct at tick %d", tick)
+		}
+	}
+
+	alive := len(w.NPCs)
+	if alive < 20 {
+		t.Errorf("expected >20 alive after 5k ticks with 100 NPCs, got %d", alive)
+	}
+	t.Logf("100 NPCs on %dx%d world: alive=%d after 5k ticks", ws, ws, alive)
 }

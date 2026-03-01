@@ -1,8 +1,11 @@
 package sandbox
 
-import "math/rand"
+import (
+	"math"
+	"math/rand"
+)
 
-// Tile types (4-bit, stored in low nibble)
+// Tile types (full byte, 256 possible types)
 const (
 	TileEmpty = iota
 	TileWall
@@ -16,15 +19,22 @@ const (
 	TilePoison  // 9 — deals damage when walked on
 )
 
-// Tile packs type (low 4 bits) + occupant ID (high 4 bits)
+// Tile is pure terrain — occupancy is tracked separately in OccGrid.
 type Tile byte
 
-func MakeTile(typ byte, occupant byte) Tile {
-	return Tile((occupant&0x0F)<<4 | (typ & 0x0F))
+func MakeTile(typ byte) Tile {
+	return Tile(typ)
 }
 
-func (t Tile) Type() byte     { return byte(t) & 0x0F }
-func (t Tile) Occupant() byte { return byte(t) >> 4 }
+func (t Tile) Type() byte { return byte(t) }
+
+// isFood returns true if the tile type is food.
+func isFood(typ byte) bool { return typ == TileFood }
+
+// isItem returns true if the tile type is an item (tool/weapon/treasure/crystal).
+func isItem(typ byte) bool {
+	return (typ >= TileTool && typ <= TileTreasure) || typ == TileCrystal
+}
 
 // World is a 2D tile grid with NPCs.
 type World struct {
@@ -33,13 +43,22 @@ type World struct {
 	NPCs []*NPC
 	Tick int
 
+	// Occupancy grid: parallel to Grid, stores NPC ID (0 = empty)
+	OccGrid []uint16
+	// NPC lookup by ID
+	npcByID map[uint16]*NPC
+
+	// Cached tile counts (maintained by SetTile)
+	foodCount int
+	itemCount int
+
 	// Config
 	FoodRate    float64 // probability of food spawn per tick
 	MaxFood     int     // max food tiles on map
 	ItemRate    float64 // probability of item spawn per tick
 	MaxItems    int     // cap for item tiles on map
 	Rng         *rand.Rand
-	NextID      byte
+	NextID      uint16
 	FoodSpawned int
 
 	// Poison tile lifetimes: grid index → tick when placed
@@ -51,7 +70,9 @@ func NewWorld(size int, rng *rand.Rand) *World {
 	w := &World{
 		Size:      size,
 		Grid:      make([]Tile, size*size),
+		OccGrid:   make([]uint16, size*size),
 		NPCs:      make([]*NPC, 0, 32),
+		npcByID:   make(map[uint16]*NPC),
 		FoodRate:  0.25,
 		MaxFood:   size * 3 / 4,
 		ItemRate:  0.05,
@@ -71,7 +92,7 @@ func NewWorld(size int, rng *rand.Rand) *World {
 			x := rng.Intn(size)
 			y := rng.Intn(size)
 			if w.TileAt(x, y).Type() == TileEmpty {
-				w.SetTile(x, y, MakeTile(TileForge, 0))
+				w.SetTile(x, y, MakeTile(TileForge))
 				break
 			}
 		}
@@ -96,30 +117,74 @@ func (w *World) TileAt(x, y int) Tile {
 }
 
 func (w *World) SetTile(x, y int, t Tile) {
-	if w.InBounds(x, y) {
-		w.Grid[w.idx(x, y)] = t
+	if !w.InBounds(x, y) {
+		return
 	}
+	i := w.idx(x, y)
+	old := w.Grid[i].Type()
+	newTyp := t.Type()
+
+	// Maintain cached counts
+	if isFood(old) {
+		w.foodCount--
+	}
+	if isItem(old) {
+		w.itemCount--
+	}
+	if isFood(newTyp) {
+		w.foodCount++
+	}
+	if isItem(newTyp) {
+		w.itemCount++
+	}
+
+	w.Grid[i] = t
+}
+
+// OccAt returns the NPC ID occupying (x,y), or 0 if empty.
+func (w *World) OccAt(x, y int) uint16 {
+	if !w.InBounds(x, y) {
+		return 0
+	}
+	return w.OccGrid[w.idx(x, y)]
+}
+
+// SetOcc sets the occupant ID at (x,y).
+func (w *World) SetOcc(x, y int, id uint16) {
+	if w.InBounds(x, y) {
+		w.OccGrid[w.idx(x, y)] = id
+	}
+}
+
+// ClearOcc clears the occupant at (x,y).
+func (w *World) ClearOcc(x, y int) {
+	if w.InBounds(x, y) {
+		w.OccGrid[w.idx(x, y)] = 0
+	}
+}
+
+// NPCByID returns the NPC with the given ID, or nil.
+func (w *World) NPCByID(id uint16) *NPC {
+	return w.npcByID[id]
 }
 
 func (w *World) Spawn(npc *NPC) bool {
 	if npc.ID == 0 {
 		npc.ID = w.NextID
 		w.NextID++
-		if w.NextID > 15 { // 4-bit occupant ID
-			w.NextID = 1
-		}
 	}
 	// Find valid tile if position occupied or blocked
-	tileOk := func(t Tile) bool {
+	tileOk := func(x, y int) bool {
+		t := w.TileAt(x, y)
 		typ := t.Type()
-		return (typ == TileEmpty || typ == TileForge) && t.Occupant() == 0
+		return (typ == TileEmpty || typ == TileForge) && w.OccAt(x, y) == 0
 	}
-	if !tileOk(w.TileAt(npc.X, npc.Y)) {
+	if !tileOk(npc.X, npc.Y) {
 		// Try random placement
 		for tries := 0; tries < 100; tries++ {
 			x := w.Rng.Intn(w.Size)
 			y := w.Rng.Intn(w.Size)
-			if tileOk(w.TileAt(x, y)) {
+			if tileOk(x, y) {
 				npc.X = x
 				npc.Y = y
 				break
@@ -127,19 +192,23 @@ func (w *World) Spawn(npc *NPC) bool {
 		}
 	}
 	// Seed per-NPC RNG from ID and world tick
-	npc.RngState = [3]byte{npc.ID, byte(w.Tick), byte(w.Tick >> 8)}
+	npc.RngState = [3]byte{byte(npc.ID), byte(npc.ID>>8) ^ byte(w.Tick), byte(w.Tick >> 8)}
 
-	// Preserve underlying tile type (e.g. forge)
-	baseType := w.TileAt(npc.X, npc.Y).Type()
-	w.SetTile(npc.X, npc.Y, MakeTile(baseType, npc.ID))
+	w.SetOcc(npc.X, npc.Y, npc.ID)
 	w.NPCs = append(w.NPCs, npc)
+	w.npcByID[npc.ID] = npc
 	return true
 }
 
-func (w *World) Remove(id byte) {
-	for i, npc := range w.NPCs {
-		if npc.ID == id {
-			w.SetTile(npc.X, npc.Y, MakeTile(TileEmpty, 0))
+func (w *World) Remove(id uint16) {
+	npc := w.npcByID[id]
+	if npc == nil {
+		return
+	}
+	w.ClearOcc(npc.X, npc.Y)
+	delete(w.npcByID, id)
+	for i, n := range w.NPCs {
+		if n.ID == id {
 			w.NPCs = append(w.NPCs[:i], w.NPCs[i+1:]...)
 			return
 		}
@@ -147,13 +216,7 @@ func (w *World) Remove(id byte) {
 }
 
 func (w *World) FoodCount() int {
-	count := 0
-	for _, t := range w.Grid {
-		if t.Type() == TileFood {
-			count++
-		}
-	}
-	return count
+	return w.foodCount
 }
 
 func (w *World) RespawnFood() {
@@ -173,9 +236,8 @@ func (w *World) RespawnFood() {
 		for tries := 0; tries < 50; tries++ {
 			x := w.Rng.Intn(w.Size)
 			y := w.Rng.Intn(w.Size)
-			t := w.TileAt(x, y)
-			if t.Type() == TileEmpty && t.Occupant() == 0 {
-				w.SetTile(x, y, MakeTile(TileFood, 0))
+			if w.TileAt(x, y).Type() == TileEmpty && w.OccAt(x, y) == 0 {
+				w.SetTile(x, y, MakeTile(TileFood))
 				w.FoodSpawned++
 				break
 			}
@@ -183,52 +245,123 @@ func (w *World) RespawnFood() {
 	}
 }
 
-// NearestFood returns Manhattan distance to nearest food tile, or 31 if none.
-func (w *World) NearestFood(x, y int) int {
-	best := 31
-	for fy := 0; fy < w.Size; fy++ {
-		for fx := 0; fx < w.Size; fx++ {
-			if w.TileAt(fx, fy).Type() == TileFood {
-				d := abs(fx-x) + abs(fy-y)
-				if d < best {
-					best = d
-				}
+// scanManhattanRing calls fn for each cell at exactly Manhattan distance d from (cx,cy).
+// fn returns true to stop scanning (found). Returns true if fn stopped early.
+func (w *World) scanManhattanRing(cx, cy, d int, fn func(x, y int) bool) bool {
+	if d == 0 {
+		if w.InBounds(cx, cy) {
+			return fn(cx, cy)
+		}
+		return false
+	}
+	// Walk the diamond perimeter: 4 edges, d cells each
+	for i := 0; i < d; i++ {
+		// Top-right edge: (cx+i, cy-d+i)
+		if x, y := cx+i, cy-d+i; w.InBounds(x, y) {
+			if fn(x, y) {
+				return true
+			}
+		}
+		// Right-bottom edge: (cx+d-i, cy+i)
+		if x, y := cx+d-i, cy+i; w.InBounds(x, y) {
+			if fn(x, y) {
+				return true
+			}
+		}
+		// Bottom-left edge: (cx-i, cy+d-i)
+		if x, y := cx-i, cy+d-i; w.InBounds(x, y) {
+			if fn(x, y) {
+				return true
+			}
+		}
+		// Left-top edge: (cx-d+i, cy-i)
+		if x, y := cx-d+i, cy-i; w.InBounds(x, y) {
+			if fn(x, y) {
+				return true
 			}
 		}
 	}
-	return best
+	return false
+}
+
+const maxSearchRadius = 31
+
+// NearestFood returns Manhattan distance to nearest food tile, or 31 if none.
+func (w *World) NearestFood(x, y int) int {
+	for d := 0; d <= maxSearchRadius; d++ {
+		found := false
+		w.scanManhattanRing(x, y, d, func(fx, fy int) bool {
+			if w.TileAt(fx, fy).Type() == TileFood {
+				found = true
+				return true
+			}
+			return false
+		})
+		if found {
+			return d
+		}
+	}
+	return maxSearchRadius
+}
+
+// NearestFoodDir returns the direction (1=N,2=E,3=S,4=W) toward nearest food, or 0.
+func (w *World) NearestFoodDir(x, y int) int {
+	for d := 0; d <= maxSearchRadius; d++ {
+		bx, by := -1, -1
+		w.scanManhattanRing(x, y, d, func(fx, fy int) bool {
+			if w.TileAt(fx, fy).Type() == TileFood {
+				bx, by = fx, fy
+				return true
+			}
+			return false
+		})
+		if bx >= 0 {
+			return directionToward(x, y, bx, by)
+		}
+	}
+	return DirNone
 }
 
 // NearestNPC returns Manhattan distance to nearest other NPC, or 31 if none.
-func (w *World) NearestNPC(x, y int, excludeID byte) int {
-	best := 31
-	for _, npc := range w.NPCs {
-		if npc.ID == excludeID || !npc.Alive() {
-			continue
-		}
-		d := abs(npc.X-x) + abs(npc.Y-y)
-		if d > 0 && d < best {
-			best = d
+func (w *World) NearestNPC(x, y int, excludeID uint16) int {
+	for d := 1; d <= maxSearchRadius; d++ {
+		found := false
+		w.scanManhattanRing(x, y, d, func(fx, fy int) bool {
+			occ := w.OccAt(fx, fy)
+			if occ != 0 && occ != excludeID {
+				if npc := w.npcByID[occ]; npc != nil && npc.Alive() {
+					found = true
+					return true
+				}
+			}
+			return false
+		})
+		if found {
+			return d
 		}
 	}
-	return best
+	return maxSearchRadius
 }
 
 // NearestNPCID returns the ID of the nearest other NPC, or 0 if none.
-func (w *World) NearestNPCID(x, y int, excludeID byte) byte {
-	best := 31
-	bestID := byte(0)
-	for _, npc := range w.NPCs {
-		if npc.ID == excludeID || !npc.Alive() {
-			continue
-		}
-		d := abs(npc.X-x) + abs(npc.Y-y)
-		if d > 0 && d < best {
-			best = d
-			bestID = npc.ID
+func (w *World) NearestNPCID(x, y int, excludeID uint16) uint16 {
+	for d := 1; d <= maxSearchRadius; d++ {
+		bestID := uint16(0)
+		w.scanManhattanRing(x, y, d, func(fx, fy int) bool {
+			occ := w.OccAt(fx, fy)
+			if occ != 0 && occ != excludeID {
+				if npc := w.npcByID[occ]; npc != nil && npc.Alive() {
+					bestID = occ
+					return true
+				}
+			}
+			return false
+		})
+		if bestID != 0 {
+			return bestID
 		}
 	}
-	return bestID
+	return 0
 }
 
 // directionToward returns the move direction (1=N,2=E,3=S,4=W) toward (tx,ty) from (fx,fy).
@@ -252,79 +385,71 @@ func directionToward(fx, fy, tx, ty int) int {
 	return DirWest
 }
 
-// NearestFoodDir returns the direction (1=N,2=E,3=S,4=W) toward nearest food, or 0.
-func (w *World) NearestFoodDir(x, y int) int {
-	best := 31
-	bx, by := x, y
-	for fy := 0; fy < w.Size; fy++ {
-		for fx := 0; fx < w.Size; fx++ {
-			if w.TileAt(fx, fy).Type() == TileFood {
-				d := abs(fx-x) + abs(fy-y)
-				if d < best {
-					best = d
+// NearestNPCFull returns (distance, ID, direction) to nearest other NPC in a single scan.
+func (w *World) NearestNPCFull(x, y int, excludeID uint16) (int, uint16, int) {
+	for d := 1; d <= maxSearchRadius; d++ {
+		bestID := uint16(0)
+		bx, by := -1, -1
+		w.scanManhattanRing(x, y, d, func(fx, fy int) bool {
+			occ := w.OccAt(fx, fy)
+			if occ != 0 && occ != excludeID {
+				if npc := w.npcByID[occ]; npc != nil && npc.Alive() {
+					bestID = occ
 					bx, by = fx, fy
+					return true
 				}
 			}
+			return false
+		})
+		if bestID != 0 {
+			return d, bestID, directionToward(x, y, bx, by)
 		}
 	}
-	if best == 31 {
-		return DirNone
-	}
-	return directionToward(x, y, bx, by)
+	return maxSearchRadius, 0, DirNone
 }
 
 // NearestNPCDir returns the direction toward the nearest other NPC, or 0.
-func (w *World) NearestNPCDir(x, y int, excludeID byte) int {
-	best := 31
-	bx, by := x, y
-	for _, npc := range w.NPCs {
-		if npc.ID == excludeID || !npc.Alive() {
-			continue
-		}
-		d := abs(npc.X-x) + abs(npc.Y-y)
-		if d > 0 && d < best {
-			best = d
-			bx, by = npc.X, npc.Y
+func (w *World) NearestNPCDir(x, y int, excludeID uint16) int {
+	for d := 1; d <= maxSearchRadius; d++ {
+		bx, by := -1, -1
+		w.scanManhattanRing(x, y, d, func(fx, fy int) bool {
+			occ := w.OccAt(fx, fy)
+			if occ != 0 && occ != excludeID {
+				if npc := w.npcByID[occ]; npc != nil && npc.Alive() {
+					bx, by = fx, fy
+					return true
+				}
+			}
+			return false
+		})
+		if bx >= 0 {
+			return directionToward(x, y, bx, by)
 		}
 	}
-	if best == 31 {
-		return DirNone
-	}
-	return directionToward(x, y, bx, by)
+	return DirNone
 }
 
 // NearestItemDir returns the direction toward the nearest item tile, or 0.
 func (w *World) NearestItemDir(x, y int) int {
-	best := 31
-	bx, by := x, y
-	for fy := 0; fy < w.Size; fy++ {
-		for fx := 0; fx < w.Size; fx++ {
-			typ := w.TileAt(fx, fy).Type()
-			if (typ >= TileTool && typ <= TileTreasure) || typ == TileCrystal {
-				d := abs(fx-x) + abs(fy-y)
-				if d < best {
-					best = d
-					bx, by = fx, fy
-				}
+	for d := 0; d <= maxSearchRadius; d++ {
+		bx, by := -1, -1
+		w.scanManhattanRing(x, y, d, func(fx, fy int) bool {
+			if isItem(w.TileAt(fx, fy).Type()) {
+				bx, by = fx, fy
+				return true
 			}
+			return false
+		})
+		if bx >= 0 {
+			return directionToward(x, y, bx, by)
 		}
 	}
-	if best == 31 {
-		return DirNone
-	}
-	return directionToward(x, y, bx, by)
+	return DirNone
 }
 
 // ItemCount returns the number of item tiles (tool, weapon, treasure, crystal) on the map.
 func (w *World) ItemCount() int {
-	count := 0
-	for _, t := range w.Grid {
-		typ := t.Type()
-		if (typ >= TileTool && typ <= TileTreasure) || typ == TileCrystal {
-			count++
-		}
-	}
-	return count
+	return w.itemCount
 }
 
 // RespawnItems spawns item tiles (tool, weapon, treasure) similar to RespawnFood.
@@ -339,10 +464,9 @@ func (w *World) RespawnItems() {
 	for tries := 0; tries < 50; tries++ {
 		x := w.Rng.Intn(w.Size)
 		y := w.Rng.Intn(w.Size)
-		t := w.TileAt(x, y)
-		if t.Type() == TileEmpty && t.Occupant() == 0 {
+		if w.TileAt(x, y).Type() == TileEmpty && w.OccAt(x, y) == 0 {
 			if w.Rng.Intn(10) == 0 {
-				w.SetTile(x, y, MakeTile(TilePoison, 0))
+				w.SetTile(x, y, MakeTile(TilePoison))
 				w.PoisonTTL[w.idx(x, y)] = w.Tick
 			} else {
 				var itemType byte
@@ -351,7 +475,7 @@ func (w *World) RespawnItems() {
 				} else {
 					itemType = byte(TileTool + w.Rng.Intn(3))
 				}
-				w.SetTile(x, y, MakeTile(itemType, 0))
+				w.SetTile(x, y, MakeTile(itemType))
 			}
 			break
 		}
@@ -360,21 +484,21 @@ func (w *World) RespawnItems() {
 
 // NearestItem returns (Manhattan distance, tile type) of nearest item tile, or (31, 0) if none.
 func (w *World) NearestItem(x, y int) (int, byte) {
-	best := 31
-	bestType := byte(0)
-	for fy := 0; fy < w.Size; fy++ {
-		for fx := 0; fx < w.Size; fx++ {
+	for d := 0; d <= maxSearchRadius; d++ {
+		bestType := byte(0)
+		w.scanManhattanRing(x, y, d, func(fx, fy int) bool {
 			typ := w.TileAt(fx, fy).Type()
-			if (typ >= TileTool && typ <= TileTreasure) || typ == TileCrystal {
-				d := abs(fx-x) + abs(fy-y)
-				if d < best {
-					best = d
-					bestType = typ
-				}
+			if isItem(typ) {
+				bestType = typ
+				return true
 			}
+			return false
+		})
+		if bestType != 0 {
+			return d, bestType
 		}
 	}
-	return best, bestType
+	return maxSearchRadius, 0
 }
 
 // ItemCountByType returns the count of items of a given type, including held by NPCs and on tiles.
@@ -430,18 +554,20 @@ func (w *World) MarketValue(item byte) int {
 
 // NearestPoison returns Manhattan distance to nearest poison tile, or 31 if none.
 func (w *World) NearestPoison(x, y int) int {
-	best := 31
-	for py := 0; py < w.Size; py++ {
-		for px := 0; px < w.Size; px++ {
-			if w.TileAt(px, py).Type() == TilePoison {
-				d := abs(px-x) + abs(py-y)
-				if d < best {
-					best = d
-				}
+	for d := 0; d <= maxSearchRadius; d++ {
+		found := false
+		w.scanManhattanRing(x, y, d, func(fx, fy int) bool {
+			if w.TileAt(fx, fy).Type() == TilePoison {
+				found = true
+				return true
 			}
+			return false
+		})
+		if found {
+			return d
 		}
 	}
-	return best
+	return maxSearchRadius
 }
 
 // DecayPoison removes poison tiles that have existed for >= 200 ticks.
@@ -451,7 +577,7 @@ func (w *World) DecayPoison() {
 			y := idx / w.Size
 			x := idx % w.Size
 			if w.TileAt(x, y).Type() == TilePoison {
-				w.SetTile(x, y, MakeTile(TileEmpty, 0))
+				w.SetTile(x, y, MakeTile(TileEmpty))
 			}
 			delete(w.PoisonTTL, idx)
 		}
@@ -464,11 +590,20 @@ func (w *World) Blight() {
 		for x := 0; x < w.Size; x++ {
 			if w.TileAt(x, y).Type() == TileFood {
 				if w.Rng.Intn(2) == 0 {
-					w.SetTile(x, y, MakeTile(TileEmpty, 0))
+					w.SetTile(x, y, MakeTile(TileEmpty))
 				}
 			}
 		}
 	}
+}
+
+// AutoWorldSize returns an appropriate world size for the given number of NPCs.
+func AutoWorldSize(npcs int) int {
+	s := int(math.Sqrt(float64(npcs))) * 4
+	if s < 32 {
+		s = 32
+	}
+	return s
 }
 
 func abs(x int) int {

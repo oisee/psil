@@ -21,10 +21,10 @@ type Scheduler struct {
 	Gas    int // gas limit per NPC brain execution
 	Output io.Writer
 
-	vm           *micro.VM    // reusable VM instance
-	tradeIntents map[byte]byte // NPC ID -> target NPC ID
-	TradeCount   int           // total bilateral trades completed
-	TeachCount   int           // total successful teach events
+	vm           *micro.VM        // reusable VM instance
+	tradeIntents map[uint16]uint16 // NPC ID -> target NPC ID
+	TradeCount   int               // total bilateral trades completed
+	TeachCount   int               // total successful teach events
 }
 
 // NewScheduler creates a scheduler for the given world.
@@ -34,7 +34,7 @@ func NewScheduler(w *World, gas int, output io.Writer) *Scheduler {
 		Gas:          gas,
 		Output:       output,
 		vm:           micro.New(),
-		tradeIntents: make(map[byte]byte),
+		tradeIntents: make(map[uint16]uint16),
 	}
 }
 
@@ -106,10 +106,12 @@ func (s *Scheduler) Tick() {
 			// Drop held item as a tile (only standard items get dropped)
 			if npc.Item >= ItemTool && npc.Item <= ItemTreasure && baseTile != TileForge {
 				tileType := byte(TileTool) + npc.Item - ItemTool
-				w.SetTile(npc.X, npc.Y, MakeTile(tileType, 0))
+				w.SetTile(npc.X, npc.Y, MakeTile(tileType))
 			} else {
-				w.SetTile(npc.X, npc.Y, MakeTile(baseTile, 0))
+				w.SetTile(npc.X, npc.Y, MakeTile(baseTile))
 			}
+			w.ClearOcc(npc.X, npc.Y)
+			delete(w.npcByID, npc.ID)
 		}
 	}
 	w.NPCs = alive
@@ -140,18 +142,21 @@ func (s *Scheduler) sense(npc *NPC) {
 	vm := s.vm
 	w := s.World
 
+	// Compute NPC-related sensors once (avoids duplicate scans)
+	nearNPCDist, nearNPCID, nearNPCDir := w.NearestNPCFull(npc.X, npc.Y, npc.ID)
+
 	vm.MemWrite(Ring0Self, int16(npc.ID))
 	vm.MemWrite(Ring0Health, int16(npc.Health))
 	vm.MemWrite(Ring0Energy, int16(npc.Energy))
 	vm.MemWrite(Ring0Hunger, int16(npc.Hunger))
-	vm.MemWrite(Ring0Fear, int16(w.NearestNPC(npc.X, npc.Y, npc.ID))) // treat all NPCs as potential enemies
+	vm.MemWrite(Ring0Fear, int16(nearNPCDist))
 	vm.MemWrite(Ring0Food, int16(w.NearestFood(npc.X, npc.Y)))
 	vm.MemWrite(Ring0Danger, int16(w.NearestPoison(npc.X, npc.Y)))
-	vm.MemWrite(Ring0Near, int16(w.NearestNPC(npc.X, npc.Y, npc.ID)))
+	vm.MemWrite(Ring0Near, int16(nearNPCDist))
 	vm.MemWrite(Ring0X, int16(npc.X))
 	vm.MemWrite(Ring0Y, int16(npc.Y))
 	vm.MemWrite(Ring0Day, int16(w.Tick%DayCycle))
-	vm.MemWrite(Ring0NearID, int16(w.NearestNPCID(npc.X, npc.Y, npc.ID)))
+	vm.MemWrite(Ring0NearID, int16(nearNPCID))
 	vm.MemWrite(Ring0FoodDir, int16(w.NearestFoodDir(npc.X, npc.Y)))
 
 	// Extended Ring0 slots
@@ -160,7 +165,7 @@ func (s *Scheduler) sense(npc *NPC) {
 	dist, _ := w.NearestItem(npc.X, npc.Y)
 	vm.MemWrite(Ring0NearItem, int16(dist))
 	vm.MemWrite(Ring0NearTrust, 0) // stub for Phase 3
-	vm.MemWrite(Ring0NearDir, int16(w.NearestNPCDir(npc.X, npc.Y, npc.ID)))
+	vm.MemWrite(Ring0NearDir, int16(nearNPCDir))
 	vm.MemWrite(Ring0ItemDir, int16(w.NearestItemDir(npc.X, npc.Y)))
 	vm.MemWrite(Ring0Rng, int16(npc.Rand()))
 	vm.MemWrite(Ring0Stress, int16(npc.Stress))
@@ -267,17 +272,12 @@ func (s *Scheduler) act(npc *NPC) {
 
 	if w.InBounds(nx, ny) {
 		dest := w.TileAt(nx, ny)
-		if dest.Type() != TileWall && dest.Occupant() == 0 {
-			// Clear old position (preserve persistent tile types like forge)
-			oldType := w.TileAt(npc.X, npc.Y).Type()
-			if oldType == TileForge {
-				w.SetTile(npc.X, npc.Y, MakeTile(TileForge, 0))
-			} else {
-				w.SetTile(npc.X, npc.Y, MakeTile(TileEmpty, 0))
-			}
+		if dest.Type() != TileWall && w.OccAt(nx, ny) == 0 {
+			// Clear old occupancy
+			w.ClearOcc(npc.X, npc.Y)
 			npc.X = nx
 			npc.Y = ny
-			w.SetTile(npc.X, npc.Y, MakeTile(w.TileAt(npc.X, npc.Y).Type(), npc.ID))
+			w.SetOcc(npc.X, npc.Y, npc.ID)
 		}
 	}
 
@@ -289,7 +289,7 @@ func (s *Scheduler) act(npc *NPC) {
 		if npc.Stress > 100 {
 			npc.Stress = 100
 		}
-		w.SetTile(npc.X, npc.Y, MakeTile(TileEmpty, npc.ID)) // consumed on contact
+		w.SetTile(npc.X, npc.Y, MakeTile(TileEmpty)) // consumed on contact
 		delete(w.PoisonTTL, w.idx(npc.X, npc.Y))
 	}
 
@@ -298,11 +298,11 @@ func (s *Scheduler) act(npc *NPC) {
 	if destType == TileCrystal {
 		// Crystal: consumed on pickup, grants permanent gas modifier
 		npc.AddMod(Modifier{Kind: ModGas, Mag: 50, Duration: -1, Source: ItemCrystal})
-		w.SetTile(npc.X, npc.Y, MakeTile(TileEmpty, npc.ID))
+		w.SetTile(npc.X, npc.Y, MakeTile(TileEmpty))
 	} else if destType >= TileTool && destType <= TileTreasure && npc.Item == ItemNone {
 		npc.Item = destType - TileTool + ItemTool // map tile type to item type
 		grantItemModifier(npc, npc.Item)
-		w.SetTile(npc.X, npc.Y, MakeTile(TileEmpty, npc.ID))
+		w.SetTile(npc.X, npc.Y, MakeTile(TileEmpty))
 	}
 
 	// Apply action
@@ -319,38 +319,34 @@ func (s *Scheduler) act(npc *NPC) {
 			}
 		}
 	case ActionAttack:
-		targetID := byte(vm.MemRead(64 + Ring1Target))
-		for _, other := range w.NPCs {
-			if other.ID == targetID && other.Alive() {
-				d := abs(other.X-npc.X) + abs(other.Y-npc.Y)
-				if d <= 1 {
-					dmg := 10 - other.ModSum(ModDefense)
-					if dmg < 1 {
-						dmg = 1
-					}
-					other.Health -= dmg
-					npc.Energy -= 5
-					// Stress: target gets combat stress
-					other.Stress += 15
-					if other.Stress > 100 {
-						other.Stress = 100
-					}
+		targetID := uint16(vm.MemRead(64 + Ring1Target))
+		if other := w.npcByID[targetID]; other != nil && other.Alive() {
+			d := abs(other.X-npc.X) + abs(other.Y-npc.Y)
+			if d <= 1 {
+				dmg := 10 - other.ModSum(ModDefense)
+				if dmg < 1 {
+					dmg = 1
+				}
+				other.Health -= dmg
+				npc.Energy -= 5
+				// Stress: target gets combat stress
+				other.Stress += 15
+				if other.Stress > 100 {
+					other.Stress = 100
 				}
 			}
 		}
 	case ActionShare:
-		targetID := byte(vm.MemRead(64 + Ring1Target))
-		for _, other := range w.NPCs {
-			if other.ID == targetID && other.Alive() {
-				d := abs(other.X-npc.X) + abs(other.Y-npc.Y)
-				if d <= 1 && npc.Energy > 20 {
-					npc.Energy -= 10
-					other.Energy += 10
-				}
+		targetID := uint16(vm.MemRead(64 + Ring1Target))
+		if other := w.npcByID[targetID]; other != nil && other.Alive() {
+			d := abs(other.X-npc.X) + abs(other.Y-npc.Y)
+			if d <= 1 && npc.Energy > 20 {
+				npc.Energy -= 10
+				other.Energy += 10
 			}
 		}
 	case ActionTrade:
-		targetID := byte(vm.MemRead(64 + Ring1Target))
+		targetID := uint16(vm.MemRead(64 + Ring1Target))
 		if npc.Item != ItemNone {
 			s.tradeIntents[npc.ID] = targetID
 		}
@@ -372,14 +368,12 @@ func (s *Scheduler) act(npc *NPC) {
 			}
 		}
 	case ActionTeach:
-		targetID := byte(vm.MemRead(64 + Ring1Target))
-		for _, other := range w.NPCs {
-			if other.ID == targetID && other.Alive() {
-				d := abs(other.X-npc.X) + abs(other.Y-npc.Y)
-				if d <= 1 && npc.Energy >= 10 {
-					s.memeticTransfer(npc, other)
-					npc.Energy -= 10
-				}
+		targetID := uint16(vm.MemRead(64 + Ring1Target))
+		if other := w.npcByID[targetID]; other != nil && other.Alive() {
+			d := abs(other.X-npc.X) + abs(other.Y-npc.Y)
+			if d <= 1 && npc.Energy >= 10 {
+				s.memeticTransfer(npc, other)
+				npc.Energy -= 10
 			}
 		}
 	}
@@ -392,8 +386,8 @@ func (s *Scheduler) resolveTrades() {
 		if !ok || targetB != idA {
 			continue // not bilateral
 		}
-		npcA := s.findNPC(idA)
-		npcB := s.findNPC(targetA)
+		npcA := s.World.npcByID[idA]
+		npcB := s.World.npcByID[targetA]
 		if npcA == nil || npcB == nil {
 			continue
 		}
@@ -439,13 +433,8 @@ func (s *Scheduler) resolveTrades() {
 }
 
 // findNPC returns the NPC with the given ID, or nil.
-func (s *Scheduler) findNPC(id byte) *NPC {
-	for _, npc := range s.World.NPCs {
-		if npc.ID == id {
-			return npc
-		}
-	}
-	return nil
+func (s *Scheduler) findNPC(id uint16) *NPC {
+	return s.World.npcByID[id]
 }
 
 // memeticTransfer copies a genome fragment from teacher to student.
@@ -542,7 +531,7 @@ func (s *Scheduler) tryEat(npc *NPC, x, y int) bool {
 	}
 	t := w.TileAt(x, y)
 	if t.Type() == TileFood {
-		w.SetTile(x, y, MakeTile(TileEmpty, t.Occupant()))
+		w.SetTile(x, y, MakeTile(TileEmpty))
 		npc.Energy += 30
 		if npc.Energy > 200 {
 			npc.Energy = 200

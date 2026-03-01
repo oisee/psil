@@ -439,6 +439,12 @@ On a 128K Spectrum, use bank switching for genome storage:
 
 This supports 256+ NPCs across a large world, with genomes paged in during brain execution.
 
+### 7.5 Go vs Z80 Architecture Note
+
+The Go sandbox (Phase 4) decoupled tile data from occupancy: tiles are pure terrain (`Tile byte` = type only), with a separate `OccGrid []uint16` tracking NPC positions, and `npcByID map[uint16]*NPC` for O(1) lookup. This scales the Go simulation to 10,000+ NPCs.
+
+The Z80 sandbox retains its own simpler format — with only 16 NPCs on a 32x32 grid, the 4-bit occupant encoding is sufficient and memory-efficient. A Z80 port scaling beyond 16 NPCs would need a separate occupancy byte array and wider NPC IDs, but this is unlikely to be needed on a 48K machine.
+
 ## 8. Integration Checklist
 
 1. **Include VM as library.** Add `DEFINE VM_LIB_MODE` before `INCLUDE "micro_psil_vm.asm"`. This skips the standalone entry point and ORG directive.

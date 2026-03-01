@@ -1,12 +1,12 @@
 # Implementation Plan: Emergent NPC Societies
 
-**Status:** Planned
+**Status:** In Progress (Phases 1-1d DONE, Phase 3 DONE, Phase 4 DONE)
 **Report:** [Emergent NPC Societies](../reports/2026-03-01-001-emergent-npc-societies.md)
 **Principle:** Go first (host machine), then Z80 port. Each phase is testable and demoable independently.
 
 ---
 
-## Phase 1: Trade & Inventory (Go)
+## Phase 1: Trade & Inventory (Go) — DONE
 
 **Goal:** NPCs can hold items, trade bilaterally, and accumulate gold. Evolution discovers barter.
 
@@ -84,6 +84,94 @@ const (
 go test ./pkg/sandbox/... -v -run "Trade|Item"
 go run ./cmd/sandbox --npcs 20 --ticks 5000 --seed 42 --verbose  # observe trade events
 ```
+
+---
+
+## Phase 1a: MaxGenome + Per-NPC RNG (Go) — DONE
+
+**Goal:** Increase genome capacity and give each NPC a deterministic PRNG.
+
+- `MaxGenome` bumped from 64 → 128
+- `NPC.RngState [3]byte` + `Rand() byte` (tribonacci, returns 0-31)
+- Ring0 slot 20 (`Ring0Rng`) populated each tick
+- RNG seeded from `[NPC.ID, tick_lo, tick_hi]` at spawn
+
+---
+
+## Phase 1b: Modifier Foundation + Crystal/Gas (Go) — DONE
+
+**Goal:** Flat, fixed-size effect system. Items, tiles, and buffs share one `Modifier` struct.
+
+- `Modifier{Kind, Mag, Duration, Source}` — 5 bytes per mod, `[4]Modifier` per NPC
+- 10 modifier kinds: Gas, Forage, Attack, Defense, Energy, Health, Stealth, Trade, Stress
+- `ModSum(kind)`, `AddMod(m)`, `RemoveMod(source)` on NPC
+- `ItemModifiers` table: Tool→Forage+1, Weapon→Attack+10, Treasure→Trade+3
+- `TileCrystal` (7): rare spawn (1-in-20), consumed on pickup → permanent ModGas+50
+- Gas bonus with diminishing returns (50, 25, 12, 6...), cap 500
+- `applyModifiers()` / `decayModifiers()` in tick loop
+- Ring0 slots: 21=Stress, 22=MyGas
+
+---
+
+## Phase 1c: Forge Tiles + Solo Crafting (Go) — DONE
+
+**Goal:** Crafting via forge tiles. Brains decide when to craft.
+
+- `TileForge` (8): 1-2 placed at world creation, persistent
+- `ActionCraft` (5): on forge + held item with recipe → swap item + modifier
+- Recipes: Tool→Compass (ModForage+2), Weapon→Shield (ModDefense+5)
+- Ring0 slot 23 (`Ring0OnForge`): 1 if on forge, 0 otherwise
+- Forge tiles preserved through NPC movement and death
+
+---
+
+## Phase 1d: Trade Pricing + Stress (Go) — DONE
+
+**Goal:** Scarcity-based economy and stress mechanic.
+
+- `MarketValue(item)`: `10 * totalItems / thisTypeCount` (rarer = more valuable)
+- Trade gold transfer: base reward + value difference / 2
+- Stress system (0-100): attack→+15 target, starvation→+5/tick, eating→-2, trading→-5, resting→-1
+- Stress output override: if stress > 30, `(stress-30)%` chance of random action
+- Defense modifier reduces attack damage
+- Fitness penalty: `-stress/5`
+
+---
+
+## Phase 3 (NPC sandbox): Max Age, Hazards, Memetic Transmission (Go) — DONE
+
+**Goal:** Break forager monoculture with forced turnover, environmental hazards, and horizontal genome transfer.
+
+- **Max age (5000 ticks)** — NPCs die of old age, forcing GA turnover
+- **Poison tiles** — 1-in-10 item spawns are poison (15 damage, consumed), decay after 200 ticks
+- **Blights** — every 1024 ticks, ~50% food destroyed
+- **Memetic transmission (ActionTeach=6)** — adjacent NPCs copy 4-byte instruction-aligned genome fragments
+  - Fitness-based probability: `teacher.Fitness / (teacher.Fitness + student.Fitness + 1)`
+  - Costs 10 energy, requires adjacency
+- **New sensors** — Ring0MyAge (slot 24), Ring0Taught (slot 25)
+- **Teacher genome seeded** — 5% of population
+- **Fitness formula** — added `+TeachCount*15`
+- **Aged-out replacement in GA** — NPCs at MaxAge replaced even if not bottom 25%
+
+See [Simulation Observations](../reports/2026-03-01-003-simulation-observations.md).
+
+---
+
+## Phase 4 (NPC sandbox): Decouple Tiles, Scale to 10,000 NPCs (Go) — DONE
+
+**Goal:** Remove the 15-NPC ceiling from 4-bit tile occupant encoding. Scale to civilization-scale simulations.
+
+- **Tiles = pure terrain** — `Tile byte` all 8 bits for type, `MakeTile(typ)` 1-arg, `Occupant()` deleted
+- **Separate OccGrid** — `[]uint16` parallel to Grid with `OccAt()` / `SetOcc()` / `ClearOcc()`
+- **NPC.ID = uint16** — monotonic, no wrapping, 65535 max
+- **O(1) NPC lookup** — `npcByID map[uint16]*NPC`
+- **Cached tile counts** — `foodCount` / `itemCount` maintained by `SetTile()`
+- **Bounded Manhattan ring search** — all `Nearest*` scan rings (radius 0→31) instead of full grid
+- **Combined NPC sensor** — `NearestNPCFull()` returns dist+ID+dir in one scan
+- **Auto-scale** — `AutoWorldSize(npcs) = max(32, sqrt(npcs)*4)`, ~6% density
+- **Resource scaling** — `MaxFood = npcs*3`, `MaxItems = max(npcs/2, 4)`
+
+Performance: 100 NPCs in 3.5s, 1000 in 41s, 10000 completes 1k ticks in 69s. See [Scaling Report](../reports/2026-03-01-004-scaling-10k-npcs.md).
 
 ---
 
@@ -420,18 +508,30 @@ Go HTTP server serving real-time simulation state as JSON. Browser renders with 
 ## Dependency Graph
 
 ```
-Phase 1 (Trade/Go) ──────────────────┐
+Phase 1 (Trade/Go) ✓
+    │
+Phase 1a (MaxGenome+RNG) ✓
+    │
+Phase 1b (Modifiers+Crystal) ✓
+    │
+Phase 1c (Forge+Crafting) ✓
+    │
+Phase 1d (Pricing+Stress) ✓
+    │
+Phase 3 (MaxAge+Hazards+Memetics/Go) ✓
+    │
+Phase 4 (Scale to 10k/Go) ✓ ────────┐
     │                                 │
 Phase 2 (Knowledge/Go)               Phase 5 (Trade/Z80)
     │                                 │
-Phase 3 (Trust/Go) ──────────────────Phase 6 (Knowledge+Trust/Z80)
+Phase 3b (Trust/Go) ────────────────Phase 6 (Knowledge+Trust/Z80)
     │                                 │
-Phase 4 (Memetics/Go) ──────────────Phase 7 (Memetics/Z80)
+    │                               Phase 7 (Memetics/Z80)
     │                                 │
     └────────── Phase 8 (Viz/Demo) ───┘
 ```
 
-Phases 1-4 are sequential (each builds on the previous). Phases 5-7 can start after their Go counterpart is stable. Phase 8 can start after Phase 3.
+Phases 1-1d, 3, and 4 are complete. Phase 2 (Knowledge) is next on the Go side. Phases 5-7 can start after their Go counterpart is stable. Phase 8 can start after Phase 2.
 
 ## Estimated Effort
 

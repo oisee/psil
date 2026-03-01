@@ -120,7 +120,7 @@ var crafterGenome = []byte{
 
 func main() {
 	npcs := flag.Int("npcs", 20, "number of NPCs")
-	worldSize := flag.Int("world", 32, "world size (NxN)")
+	worldSize := flag.Int("world", 0, "world size (NxN), 0=auto")
 	ticks := flag.Int("ticks", 10000, "number of ticks to simulate")
 	gas := flag.Int("gas", 200, "gas limit per NPC brain")
 	evolveEvery := flag.Int("evolve-every", 100, "ticks between evolution rounds")
@@ -132,9 +132,20 @@ func main() {
 
 	rng := rand.New(rand.NewSource(*seed))
 
-	w := sandbox.NewWorld(*worldSize, rng)
-	w.MaxFood = *worldSize * 2 // more food to sustain population
+	// Auto-scale world size
+	ws := *worldSize
+	if ws == 0 {
+		ws = sandbox.AutoWorldSize(*npcs)
+	}
+
+	w := sandbox.NewWorld(ws, rng)
+	w.MaxFood = *npcs * 3
 	w.FoodRate = 0.5
+	maxItems := *npcs / 2
+	if maxItems < 4 {
+		maxItems = 4
+	}
+	w.MaxItems = maxItems
 	ga := sandbox.NewGA(rng)
 
 	// Discard NPC brain output (no print spam)
@@ -167,8 +178,8 @@ func main() {
 			genome = ga.RandomGenome(24 + rng.Intn(16))
 		}
 		npc := sandbox.NewNPC(genome)
-		npc.X = rng.Intn(*worldSize)
-		npc.Y = rng.Intn(*worldSize)
+		npc.X = rng.Intn(ws)
+		npc.Y = rng.Intn(ws)
 		// Give seeded traders a starting item
 		if i < numTraders {
 			npc.Item = byte(sandbox.ItemTool + rng.Intn(3))
@@ -185,11 +196,15 @@ func main() {
 	}
 
 	// Seed some food
-	for i := 0; i < *worldSize; i++ {
-		x := rng.Intn(*worldSize)
-		y := rng.Intn(*worldSize)
-		if w.TileAt(x, y).Type() == sandbox.TileEmpty && w.TileAt(x, y).Occupant() == 0 {
-			w.SetTile(x, y, sandbox.MakeTile(sandbox.TileFood, 0))
+	seedFood := ws
+	if seedFood < *npcs {
+		seedFood = *npcs
+	}
+	for i := 0; i < seedFood; i++ {
+		x := rng.Intn(ws)
+		y := rng.Intn(ws)
+		if w.TileAt(x, y).Type() == sandbox.TileEmpty && w.OccAt(x, y) == 0 {
+			w.SetTile(x, y, sandbox.MakeTile(sandbox.TileFood))
 		}
 	}
 
@@ -224,8 +239,8 @@ func main() {
 					copy(genome, foragerGenome)
 				}
 				npc := sandbox.NewNPC(genome)
-				npc.X = rng.Intn(*worldSize)
-				npc.Y = rng.Intn(*worldSize)
+				npc.X = rng.Intn(ws)
+				npc.Y = rng.Intn(ws)
 				if refillIdx%5 == 0 {
 					npc.Item = byte(sandbox.ItemTool + rng.Intn(3))
 				}
@@ -352,36 +367,44 @@ func printSnapshot(w *sandbox.World, sched *sandbox.Scheduler, tick int) {
 	fmt.Fprintf(os.Stderr, "\n--- Snapshot at tick %d ---\n", tick)
 
 	// NPC table
-	fmt.Fprintf(os.Stderr, "%-4s %-5s %-5s %-6s %-6s %-5s %-5s %-6s %-7s\n",
-		"ID", "X,Y", "HP", "Energy", "Item", "Gold", "Age", "Stress", "Fitness")
+	alive := make([]*sandbox.NPC, 0, len(w.NPCs))
 	for _, npc := range w.NPCs {
-		if !npc.Alive() {
-			continue
+		if npc.Alive() {
+			alive = append(alive, npc)
 		}
+	}
+
+	fmt.Fprintf(os.Stderr, "%-6s %-5s %-5s %-6s %-6s %-5s %-5s %-6s %-7s\n",
+		"ID", "X,Y", "HP", "Energy", "Item", "Gold", "Age", "Stress", "Fitness")
+	for _, npc := range alive {
 		itemNames := []string{"none", "food", "tool", "weapon", "treasure", "crystal", "shield", "compass"}
 		itemName := "?"
 		if int(npc.Item) < len(itemNames) {
 			itemName = itemNames[npc.Item]
 		}
-		fmt.Fprintf(os.Stderr, "%-4d %2d,%-2d %-5d %-6d %-6s %-5d %-5d %-6d %-7d\n",
+		fmt.Fprintf(os.Stderr, "%-6d %2d,%-2d %-5d %-6d %-6s %-5d %-5d %-6d %-7d\n",
 			npc.ID, npc.X, npc.Y, npc.Health, npc.Energy, itemName, npc.Gold, npc.Age, npc.Stress, npc.Fitness)
 	}
 
-	// Cluster analysis (simple: find groups within distance 3)
-	clusters := findClusters(w.NPCs, 3)
-	fmt.Fprintf(os.Stderr, "\nClusters (distance ≤ 3): %d groups\n", len(clusters))
-	for i, c := range clusters {
-		cx, cy := centroid(c)
-		totalGold := 0
-		items := 0
-		for _, npc := range c {
-			totalGold += npc.Gold
-			if npc.Item != sandbox.ItemNone {
-				items++
+	// Cluster analysis — skip at high population to avoid O(n^2)
+	if len(alive) <= 500 {
+		clusters := findClusters(alive, 3)
+		fmt.Fprintf(os.Stderr, "\nClusters (distance ≤ 3): %d groups\n", len(clusters))
+		for i, c := range clusters {
+			cx, cy := centroid(c)
+			totalGold := 0
+			items := 0
+			for _, npc := range c {
+				totalGold += npc.Gold
+				if npc.Item != sandbox.ItemNone {
+					items++
+				}
 			}
+			fmt.Fprintf(os.Stderr, "  cluster %d: %d NPCs at ~(%d,%d) gold=%d items=%d\n",
+				i+1, len(c), cx, cy, totalGold, items)
 		}
-		fmt.Fprintf(os.Stderr, "  cluster %d: %d NPCs at ~(%d,%d) gold=%d items=%d\n",
-			i+1, len(c), cx, cy, totalGold, items)
+	} else {
+		fmt.Fprintf(os.Stderr, "\nClusters: skipped (population=%d > 500)\n", len(alive))
 	}
 
 	// Mini-map (world grid with NPCs marked)
@@ -389,18 +412,11 @@ func printSnapshot(w *sandbox.World, sched *sandbox.Scheduler, tick int) {
 		fmt.Fprintf(os.Stderr, "\nMap (%dx%d):\n", w.Size, w.Size)
 		for y := 0; y < w.Size; y++ {
 			for x := 0; x < w.Size; x++ {
-				t := w.TileAt(x, y)
-				occ := t.Occupant()
-				typ := t.Type()
+				occ := w.OccAt(x, y)
+				typ := w.TileAt(x, y).Type()
 				if occ != 0 {
 					// Find the NPC to check item
-					var npc *sandbox.NPC
-					for _, n := range w.NPCs {
-						if n.ID == occ && n.X == x && n.Y == y {
-							npc = n
-							break
-						}
-					}
+					npc := w.NPCByID(occ)
 					if npc != nil && npc.Item != sandbox.ItemNone {
 						fmt.Fprint(os.Stderr, "T") // trader (has item)
 					} else {
@@ -435,17 +451,11 @@ func printSnapshot(w *sandbox.World, sched *sandbox.Scheduler, tick int) {
 
 // findClusters groups NPCs by Manhattan proximity using union-find.
 func findClusters(npcs []*sandbox.NPC, maxDist int) [][]*sandbox.NPC {
-	alive := make([]*sandbox.NPC, 0, len(npcs))
-	for _, n := range npcs {
-		if n.Alive() {
-			alive = append(alive, n)
-		}
-	}
-	if len(alive) == 0 {
+	if len(npcs) == 0 {
 		return nil
 	}
 
-	parent := make([]int, len(alive))
+	parent := make([]int, len(npcs))
 	for i := range parent {
 		parent[i] = i
 	}
@@ -463,9 +473,9 @@ func findClusters(npcs []*sandbox.NPC, maxDist int) [][]*sandbox.NPC {
 		}
 	}
 
-	for i := 0; i < len(alive); i++ {
-		for j := i + 1; j < len(alive); j++ {
-			d := int(math.Abs(float64(alive[i].X-alive[j].X))) + int(math.Abs(float64(alive[i].Y-alive[j].Y)))
+	for i := 0; i < len(npcs); i++ {
+		for j := i + 1; j < len(npcs); j++ {
+			d := int(math.Abs(float64(npcs[i].X-npcs[j].X))) + int(math.Abs(float64(npcs[i].Y-npcs[j].Y)))
 			if d <= maxDist {
 				union(i, j)
 			}
@@ -473,7 +483,7 @@ func findClusters(npcs []*sandbox.NPC, maxDist int) [][]*sandbox.NPC {
 	}
 
 	groups := map[int][]*sandbox.NPC{}
-	for i, n := range alive {
+	for i, n := range npcs {
 		r := find(i)
 		groups[r] = append(groups[r], n)
 	}
