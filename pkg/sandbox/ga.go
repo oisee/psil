@@ -9,7 +9,7 @@ import (
 
 const (
 	MinGenome = 16
-	MaxGenome = 64
+	MaxGenome = 128
 )
 
 // GA is the genetic algorithm engine for evolving NPC genomes.
@@ -26,7 +26,7 @@ func NewGA(rng *rand.Rand) *GA {
 	}
 }
 
-// Evolve replaces the bottom 25% of the population with offspring from the top 50%.
+// Evolve replaces the bottom 25% and any aged-out NPCs with offspring from the top 50%.
 func (ga *GA) Evolve(npcs []*NPC) []*NPC {
 	if len(npcs) < 4 {
 		return npcs
@@ -43,14 +43,26 @@ func (ga *GA) Evolve(npcs []*NPC) []*NPC {
 	poolSize := len(sorted) / 2
 	pool := sorted[:poolSize]
 
-	// Bottom 25% get replaced
+	// Collect victims: bottom 25% + any NPC at MaxAge
 	replaceCount := len(sorted) / 4
 	if replaceCount < 1 {
 		replaceCount = 1
 	}
 
-	// Generate offspring
+	// Mark bottom 25% as victims
+	victims := make(map[*NPC]bool)
 	for i := 0; i < replaceCount; i++ {
+		victims[sorted[len(sorted)-1-i]] = true
+	}
+	// Also mark aged-out NPCs (even if they're in the top 50%)
+	for _, npc := range sorted {
+		if npc.Age >= MaxAge {
+			victims[npc] = true
+		}
+	}
+
+	// Generate offspring for all victims
+	for victim := range victims {
 		parentA := ga.tournamentSelect(pool)
 		parentB := ga.tournamentSelect(pool)
 
@@ -60,8 +72,6 @@ func (ga *GA) Evolve(npcs []*NPC) []*NPC {
 			childGenome = ga.mutate(childGenome)
 		}
 
-		// Replace bottom NPC in-place
-		victim := sorted[len(sorted)-1-i]
 		victim.Genome = childGenome
 		victim.Health = 100
 		victim.Energy = 100
@@ -69,6 +79,13 @@ func (ga *GA) Evolve(npcs []*NPC) []*NPC {
 		victim.Fitness = 0
 		victim.Hunger = 0
 		victim.FoodEaten = 0
+		victim.Gold = (parentA.Gold + parentB.Gold) / 4 // economic memory persists (diminished)
+		victim.Item = ItemNone
+		victim.Mods = [4]Modifier{}
+		victim.Stress = 0
+		victim.CraftCount = 0
+		victim.Taught = 0
+		victim.TeachCount = 0
 	}
 
 	return npcs
@@ -88,8 +105,8 @@ func (ga *GA) tournamentSelect(pool []*NPC) *NPC {
 
 // crossover performs instruction-aligned single-point crossover.
 func (ga *GA) crossover(a, b []byte) []byte {
-	pointsA := opcodeAlignedPoints(a)
-	pointsB := opcodeAlignedPoints(b)
+	pointsA := OpcodeAlignedPoints(a)
+	pointsB := OpcodeAlignedPoints(b)
 
 	if len(pointsA) < 2 || len(pointsB) < 2 {
 		// Can't crossover, return copy of better parent (a)
@@ -120,7 +137,7 @@ func (ga *GA) crossover(a, b []byte) []byte {
 }
 
 // opcodeAlignedPoints returns valid instruction boundaries in bytecode.
-func opcodeAlignedPoints(code []byte) []int {
+func OpcodeAlignedPoints(code []byte) []int {
 	points := []int{0}
 	pc := 0
 	for pc < len(code) {
@@ -189,28 +206,41 @@ func (ga *GA) mutate(genome []byte) []byte {
 		g = append(g, genome[pos+1:]...)
 		return g
 
-	case 3: // Constant tweak: find a small number and +/- 1
+	case 3: // Constant tweak: find a small number or 2-byte op operand and +/- 1
 		g := make([]byte, len(genome))
 		copy(g, genome)
-		// Find a small number opcode (0x20-0x3F)
+		// Find tweakable positions: small numbers (0x20-0x3F) and operands of 2-byte ops
 		candidates := []int{}
-		for i, b := range g {
-			if micro.IsSmallNum(b) {
+		for i := 0; i < len(g); i++ {
+			if micro.IsSmallNum(g[i]) {
 				candidates = append(candidates, i)
+			} else if micro.Is2ByteOp(g[i]) && i+1 < len(g) {
+				candidates = append(candidates, i+1) // operand byte
+				i++ // skip operand
 			}
 		}
 		if len(candidates) > 0 {
 			idx := candidates[ga.Rng.Intn(len(candidates))]
-			if ga.Rng.Intn(2) == 0 && g[idx] < 0x3F {
-				g[idx]++
-			} else if g[idx] > 0x20 {
-				g[idx]--
+			if micro.IsSmallNum(g[idx]) {
+				// Small number: tweak within range 0x20-0x3F
+				if ga.Rng.Intn(2) == 0 && g[idx] < 0x3F {
+					g[idx]++
+				} else if g[idx] > 0x20 {
+					g[idx]--
+				}
+			} else {
+				// 2-byte op operand: tweak +/- 1 within 0-255
+				if ga.Rng.Intn(2) == 0 && g[idx] < 0xFF {
+					g[idx]++
+				} else if g[idx] > 0 {
+					g[idx]--
+				}
 			}
 		}
 		return g
 
 	case 4: // Block swap: swap two instruction-aligned segments
-		points := opcodeAlignedPoints(genome)
+		points := OpcodeAlignedPoints(genome)
 		if len(points) < 4 {
 			return genome
 		}
@@ -242,7 +272,7 @@ func (ga *GA) mutate(genome []byte) []byte {
 		if len(genome) >= MaxGenome-4 {
 			return genome
 		}
-		points := opcodeAlignedPoints(genome)
+		points := OpcodeAlignedPoints(genome)
 		if len(points) < 3 {
 			return genome
 		}
@@ -271,17 +301,24 @@ func (ga *GA) mutate(genome []byte) []byte {
 // randomOpcode returns a random valid 1-byte opcode weighted toward useful ones.
 func (ga *GA) randomOpcode() byte {
 	// Weighted distribution:
-	// 40% commands (0x00-0x1F) - stack ops, math, control flow
+	// 30% commands (0x00-0x1F) - stack ops, math, control flow
 	// 30% small numbers (0x20-0x3F) - constants
-	// 15% inline symbols (0x40-0x5F) - sensor references
+	// 15% ring ops (r0@, r1!) - sensor reads and action writes
+	// 10% inline symbols (0x40-0x5F) - sensor references
 	// 10% inline quotations (0x60-0x67) - first 8 quots
 	// 5% special (yield, halt)
 	r := ga.Rng.Float64()
 	switch {
-	case r < 0.40:
+	case r < 0.30:
 		return byte(ga.Rng.Intn(0x20))
-	case r < 0.70:
+	case r < 0.60:
 		return byte(0x20 + ga.Rng.Intn(0x20))
+	case r < 0.75:
+		// Ring ops: 50% r0@ (read sensor), 50% r1! (write action)
+		if ga.Rng.Intn(2) == 0 {
+			return micro.OpRing0R
+		}
+		return micro.OpRing1W
 	case r < 0.85:
 		return byte(0x40 + ga.Rng.Intn(0x1A)) // only defined symbols
 	case r < 0.95:

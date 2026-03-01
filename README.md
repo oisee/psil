@@ -1,5 +1,70 @@
 # PSIL - Point-free Stack-based Interpreted Language
 
+## Changelog
+
+### Phase 3 — Max Age, Hazards, and Memetic Transmission (2026-03-01)
+
+500k-tick simulations revealed **frozen evolution** — the best NPC lived 137k ticks, forager monoculture dominated all seeds, and trade was a one-shot event. Phase 3 breaks the stasis:
+
+- **Max age (5000 ticks)** — forces NPC turnover so the GA keeps running. No more immortal foragers stalling evolution. Best NPC age now capped under 5000.
+- **Poison tiles** — 1-in-10 item spawns are poison (15 damage on contact, consumed). Decay after 200 ticks. `Ring0Danger` (slot 6) reports nearest poison distance.
+- **Blights** — every 1024 ticks, ~50% of food is destroyed. Creates periodic famine beyond winter.
+- **Memetic transmission (ActionTeach=6)** — horizontal genome transfer. Adjacent NPCs copy 4-byte instruction-aligned fragments. Fitness-based probability (fitter teachers are more persuasive, fitter students resist). Costs 10 energy.
+- **New sensors** — `Ring0MyAge` (slot 24: remaining life), `Ring0Taught` (slot 25: times genome was modified).
+- **Teacher genome seeded** — 5% of population carries a teacher genome that teaches adjacent NPCs when holding an item.
+- **Fitness rewards teaching** — `+TeachCount*15` in fitness formula.
+- **Aged-out replacement in GA** — NPCs at MaxAge are replaced even if not bottom 25%.
+
+Result: trades re-emerge across all seeds (40-326 per 50k run, up from 1). Teach events 3-16 per seed. No NPC lives past 5000 ticks. See [Simulation Observations](reports/2026-03-01-003-simulation-observations.md).
+
+### Phase 2 — Evolve Smarter: Portable Crafting, Seasonal Scarcity, Mutation Fix (2026-03-01)
+
+50k-tick simulations revealed a **forager monoculture** — every seed converged to the same 8-byte genome that moves toward food and eats. No NPC ever traded, crafted, or did anything complex. Phase 2 fixes three root causes:
+
+- **Mutation blind spot fixed** — `randomOpcode()` now generates ring ops (`r0@`, `r1!`) at 15%, so mutation can discover sensor reads and action writes. Constant tweak also adjusts 2-byte op operands.
+- **Portable crafting** — `ActionCraft` works anywhere (free on forge, 20 energy off forge). Auto-craft triggers when any NPC walks onto a forge tile with a craftable item. No bytecode needed.
+- **Seasonal scarcity** — Winter (last quarter of each 256-tick day cycle) stops all food spawning. Reduced `MaxFood` and `FoodRate` defaults. Tools/compasses now grant extended foraging radius (`1 + ModForage`), creating real survival advantage.
+- **More forges** — `max(3, size/8)` forges instead of 1-2, increasing auto-craft encounters.
+- **Fitness rewards crafting** — `gold*20` (was `*5`), `+craftCount*30`, craft bonus `+50` (was `+20`).
+- **Gold inheritance** — offspring get `(parentA.Gold + parentB.Gold) / 4`, preserving economic memory.
+- **Crafter genome seeded** — 10% of initial population carries a crafter genome that reads `Ring0OnForge` and crafts when possible.
+
+Result: 7 of 8 item-holding NPCs now craft compasses. Zero crafted items in Phase 1. See [Simulation Observations](reports/2026-03-01-003-simulation-observations.md).
+
+### Phase 1a-1d — Modifiers, Crystals, Crafting, Economy, Stress (2026-03-01)
+
+- Modifier system: 4-slot fixed-size effect array (gas, forage, attack, defense, energy, health, stress)
+- Crystal tiles: consumed on pickup, grant permanent +50 gas with diminishing returns
+- Forge tiles and crafting: tool→compass, weapon→shield
+- Stress system: combat stress, starvation stress, eating/trading/resting relief, output override at high stress
+- Scarcity-based trade pricing: `MarketValue = 10 * totalItems / countOfThisType`
+- See [Emergent Economies and Crafting](reports/2026-03-01-002-emergent-economies-and-crafting.md)
+
+### Phase 0 — NPC Sandbox: Evolving Bytecode Brains (2026-03-01)
+
+- 32x32 tile world with food, items, NPCs
+- 26-slot Ring0 sensors, 4-slot Ring1 actions
+- Genetic algorithm: tournament-3, instruction-aligned crossover, 6 mutation operators
+- Bilateral trade with item swapping
+- Seed genomes: forager, trader, random walker
+- Go + Z80 cross-validated (identical Ring1 outputs)
+- See [Emergent NPC Societies](reports/2026-03-01-001-emergent-npc-societies.md) — trade, knowledge, memetics, and deception on concatenative bytecode
+
+### micro-PSIL Bytecode VM (2026-01-11)
+
+- 1,552-byte Z80 VM running concatenative bytecode
+- UTF-8-style opcode encoding (1-3 bytes)
+- 4 test programs verified: arithmetic, hello, factorial, npc-thought
+- See [micro-PSIL Bytecode VM](reports/2026-01-11-001-micro-psil-bytecode-vm.md) and [MinZ Feasibility](reports/2026-01-11-002-micro-psil-on-minz-feasibility.md)
+
+### PSIL Language (2026-01-10)
+
+- Concatenative stack-based language inspired by Joy
+- Quotations, combinators, graphics, turtle graphics
+- See [Design Rationale](reports/2026-01-10-001-psil-design-rationale.md)
+
+---
+
 PSIL is a concatenative, stack-based, point-free functional language inspired by Joy, designed for VM execution and targeting Z80/6502 compatibility.
 
 ## Features
@@ -473,12 +538,17 @@ The theory from the sections above is now real. `pkg/sandbox` implements a compl
 
 Each tick of the simulation:
 
-1. **Sense** - the world fills Ring0 slots with the NPC's sensor data (health, energy, hunger, nearest food distance, nearest enemy distance, position, day counter)
-2. **Think** - the NPC's bytecode genome runs on a fresh VM with a gas limit of 200 steps
-3. **Act** - the scheduler reads Ring1 outputs (move direction, action type) and applies them to the world
-4. **Decay** - energy drains each tick; when energy hits 0, health drains; when health hits 0, the NPC dies
+1. **Sense** — the world fills 26 Ring0 slots with NPC sensor data (health, energy, hunger, distances, items, stress, RNG, gas capacity, forge proximity)
+2. **Think** — the NPC's bytecode genome runs on a fresh VM with gas = base + crystal bonus (diminishing returns, cap 500)
+3. **Stress check** — if stress > 30, there's a `(stress-30)%` chance the brain's output is overridden with random movement/action
+4. **Act** — the scheduler reads Ring1 outputs (move direction, action type, target) and applies them: movement, item pickup, crystal absorption, combat (with defense modifiers), trading, crafting
+5. **Auto-actions** — NPCs passively eat food within foraging radius (`1 + ModForage`); auto-craft when standing on forge with craftable item
+6. **Modifiers** — per-tick modifiers (energy, health, stress) apply; durations tick down; expired modifiers clear
+7. **Decay** — energy drains; starvation (energy < 50) adds stress; resting (energy > 150) reduces stress
+8. **Economy** — bilateral trades transfer items with scarcity-based gold pricing; trading reduces stress
+9. **Fitness** — scored as `age + food*10 + health + gold*20 + craftCount*30 - stress/5`
 
-Every N ticks, the genetic algorithm kicks in: the bottom 25% of the population (by fitness) is replaced by offspring bred from the top 50% via tournament selection, instruction-aligned crossover, and one of six mutation operators.
+Every N ticks, the GA replaces the bottom 25% with offspring from the top 50% via tournament selection, instruction-aligned crossover, and six mutation operators.
 
 ### Ring0 Sensors (read-only, filled by world)
 
@@ -495,15 +565,57 @@ Every N ticks, the genetic algorithm kicks in: the bottom 25% of the population 
 | 8 | x | X position |
 | 9 | y | Y position |
 | 10 | day | tick mod cycle |
+| 11-12 | near_id, food_dir | nearest NPC ID, food direction |
+| 13-14 | my_gold, my_item | gold count, held item type |
+| 15-16 | near_item, near_trust | nearest item distance, trust (stub) |
+| 17-19 | near_dir, item_dir, rng | NPC direction, item direction, random 0-31 |
+| 20 | stress | current stress (0-100) |
+| 21 | my_gas | effective gas (base + crystal bonuses) |
+| 22 | on_forge | 1 if standing on forge tile |
 
 ### Ring1 Actions (writable, read by scheduler)
 
 | Slot | Meaning | Values |
 |------|---------|--------|
 | 0 | move | 0=none, 1=N, 2=E, 3=S, 4=W |
-| 1 | action | 0=idle, 1=eat, 2=attack, 3=share |
+| 1 | action | 0=idle, 1=eat, 2=attack, 3=share, 4=trade, 5=craft |
 | 2 | target | target NPC ID |
 | 3 | emotion | emotional state |
+
+### Modifier System
+
+NPCs carry up to 4 concurrent modifiers — a flat, fixed-size effect system with no heap allocation. Items, tiles, and temporary buffs all share the same `Modifier{Kind, Mag, Duration, Source}` struct.
+
+| Kind | Constant | Example |
+|------|----------|---------|
+| Gas | 1 | Crystal (+50 gas permanently) |
+| Forage | 2 | Tool (+1), Compass (+2) |
+| Attack | 3 | Weapon (+10 damage) |
+| Defense | 4 | Shield (+5 damage reduction) |
+| Energy | 5 | Shrine buff (+10/tick temporary) |
+| Health | 6 | Poison (-5/tick), Regen (+2/tick) |
+| Stealth | 7 | Cloak (detection range) |
+| Trade | 8 | Treasure (+3 gold per trade) |
+| Stress | 9 | Combat stress (+15 one-shot) |
+
+Passive modifiers (Gas, Forage, Attack, Defense, Trade) are read at point of use via `ModSum(kind)`. Per-tick modifiers (Energy, Health, Stress) are applied each tick. When an NPC picks up/trades/crafts an item, the old modifier is removed and the new one granted automatically.
+
+### Items, Tiles, and Crafting
+
+| Item | Type | Modifier | Source |
+|------|------|----------|--------|
+| Tool | 2 | Forage +1 | Ground tile |
+| Weapon | 3 | Attack +10 | Ground tile |
+| Treasure | 4 | Trade +3 | Ground tile |
+| Crystal | 5 | Gas +50 (permanent) | Rare ground tile (1-in-20), consumed on pickup |
+| Shield | 6 | Defense +5 | Crafted: Weapon on Forge |
+| Compass | 7 | Forage +2 | Crafted: Tool on Forge |
+
+**Forge tiles** (`max(3, size/8)` per world) are permanent landmarks. Crafting works anywhere: free on forge, costs 20 energy off forge. NPCs auto-craft when standing on a forge with a craftable item. Crafting grants +50 fitness and increments `CraftCount`.
+
+### Economy
+
+Trade gold is proportional to scarcity: `MarketValue = 10 * totalItems / countOfThisType`. When two NPCs trade, the value difference flows as gold — the NPC receiving the rarer item pays more. This creates emergent price discovery.
 
 ### Seed Genomes
 
@@ -548,30 +660,14 @@ yield
 # Quick test (100 ticks, 10 NPCs)
 go run ./cmd/sandbox --npcs 10 --ticks 100 --seed 42 --verbose
 
-# Full evolution run (5000 ticks, 20 NPCs, evolve every 100 ticks)
-go run ./cmd/sandbox --npcs 20 --ticks 5000 --seed 42 --verbose
+# Full evolution run with economy (10k ticks, 20 NPCs)
+go run ./cmd/sandbox --npcs 20 --ticks 10000 --seed 42 --verbose
 
-# Minimal output (just final stats)
-go run ./cmd/sandbox --npcs 20 --ticks 5000 --seed 42
+# With spatial snapshots showing forge/crystal tiles
+go run ./cmd/sandbox --npcs 20 --ticks 10000 --seed 42 --verbose --snap-every 2500
 ```
 
-Example verbose output:
-```
-tick=0 alive=20 food=32 avg_fit=101 best_fit=101
-  best_genome=041f051039070c2447f104101a1b0e47f0f1642b4c00222df0
-tick=100 alive=20 food=32 avg_fit=143 best_fit=191
-  best_genome=041f051039070c2447f104101a1b0e47f0f1642b4c00222df0
-tick=200 alive=10 food=32 avg_fit=78 best_fit=195
-  best_genome=15021049384027f01d4d12146634011d1466523c4e0cf00335f13638131c5903560e442c351934571df0
-...
-tick=4900 alive=5 food=32 avg_fit=97 best_fit=199
-  best_genome=061d304f2243240f0d66f115084618f0
-
-=== Final Stats (tick 5000) ===
-alive=5 food_on_map=32 total_food_spawned=0
-best_fitness=199 best_age=99 best_food=0
-Best genome: 061d304f2243240f0d66f115084618f0
-```
+The verbose output shows NPC table with stress, gold, items (including crafted shield/compass), forge (`F`) and crystal (`*`) tiles on the map, and scarcity-based trade pricing.
 
 ### Running the Z80 Sandbox
 
@@ -610,7 +706,7 @@ The GA engine (`pkg/sandbox/ga.go`) implements:
   5. Block swap — swap two instruction-aligned segments
   6. Block duplicate — copy a short segment to another position
 
-Genome size is enforced between 16 and 64 bytes.
+Genome size is enforced between 16 and 128 bytes.
 
 ### Cross-Validation
 
@@ -624,11 +720,11 @@ The seed genomes are cross-validated between Go and Z80 VMs (`testdata/sandbox/c
 | `pkg/sandbox/npc.go` | NPC struct, Ring0/Ring1 slot definitions |
 | `pkg/sandbox/scheduler.go` | Tick loop: sense, think, act, decay |
 | `pkg/sandbox/ga.go` | Genetic algorithm engine |
-| `pkg/sandbox/sandbox_test.go` | Unit tests (9 tests) |
+| `pkg/sandbox/sandbox_test.go` | Unit + e2e tests (42+ tests) |
 | `cmd/sandbox/main.go` | CLI runner with flags |
 | `z80/sandbox.asm` | Z80 sandbox (scheduler + world + NPC init) |
 | `z80/ga.asm` | Z80 GA (tournament-2, point mutation) |
-| `testdata/sandbox/*.mpsil` | Seed genomes (forager, flee, random) |
+| `testdata/sandbox/*.mpsil` | Seed genomes (forager, flee, random, trader) |
 | `testdata/sandbox/crossval_test.go` | Cross-validation tests |
 | `z80/build/sandbox.bin` | Prebuilt Z80 binary (2,818 bytes) |
 
