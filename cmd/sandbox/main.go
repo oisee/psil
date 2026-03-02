@@ -148,6 +148,7 @@ type simConfig struct {
 	snapEvery, tlEvery                       int
 	crossoverMode                            sandbox.CrossoverMode
 	classicRate                              float64
+	biomes                                   bool
 }
 
 type simResult struct {
@@ -170,7 +171,12 @@ func runSimulation(cfg simConfig) simResult {
 		ws = sandbox.AutoWorldSize(cfg.npcs)
 	}
 
-	w := sandbox.NewWorld(ws, rng)
+	var w *sandbox.World
+	if cfg.biomes {
+		w = sandbox.NewWorldWithBiomes(ws, rng)
+	} else {
+		w = sandbox.NewWorld(ws, rng)
+	}
 	w.MaxFood = cfg.npcs * 3
 	w.FoodRate = 0.5
 	maxItems := cfg.npcs / 2
@@ -436,7 +442,12 @@ func runFullSimulation(cfg simConfig, csvOut bool) {
 		ws = sandbox.AutoWorldSize(cfg.npcs)
 	}
 
-	w := sandbox.NewWorld(ws, rng)
+	var w *sandbox.World
+	if cfg.biomes {
+		w = sandbox.NewWorldWithBiomes(ws, rng)
+	} else {
+		w = sandbox.NewWorld(ws, rng)
+	}
 	w.MaxFood = cfg.npcs * 3
 	w.FoodRate = 0.5
 	maxItems := cfg.npcs / 2
@@ -647,6 +658,7 @@ func main() {
 	csvOut := flag.Bool("csv", false, "output timeline as CSV to stdout")
 	crossover := flag.String("crossover", "growth", "crossover mode: growth or classic")
 	classicRate := flag.Float64("classic-rate", 0.20, "classic crossover fraction (0-1)")
+	biomes := flag.Bool("biomes", false, "enable WFC biome generation")
 	ab := flag.Bool("ab", false, "run both growth and classic modes, print comparison")
 	flag.Parse()
 
@@ -679,6 +691,7 @@ func main() {
 		tlEvery:       tlEvery,
 		crossoverMode: mode,
 		classicRate:   *classicRate,
+		biomes:        *biomes,
 	}
 
 	if *ab {
@@ -770,6 +783,19 @@ func printSnapshot(w *sandbox.World, sched *sandbox.Scheduler, tick int) {
 		}
 	} else {
 		fmt.Fprintf(os.Stderr, "\nClusters: skipped (population=%d > 500)\n", len(alive))
+	}
+
+	// Biome map (if biomes enabled)
+	if w.Biomes && w.BiomeGrid != nil && w.Size <= 64 {
+		fmt.Fprintf(os.Stderr, "\nBiome Map (%dx%d):\n", w.Size, w.Size)
+		for y := 0; y < w.Size; y++ {
+			for x := 0; x < w.Size; x++ {
+				b := w.BiomeGrid[y*w.Size+x]
+				fmt.Fprintf(os.Stderr, "%c", sandbox.BiomeChar(b))
+			}
+			fmt.Fprintln(os.Stderr)
+		}
+		fmt.Fprintf(os.Stderr, "Biomes: .=Clearing T=Forest ^=Mountain ~=Swamp H=Village ==River #=Bridge\n")
 	}
 
 	// Mini-map (world grid with NPCs marked)

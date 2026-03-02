@@ -2,6 +2,48 @@
 
 ## Changelog
 
+### Phase 7 — WFC Biome Generation: Geography Breaks the Monoculture (2026-03-02)
+
+The flat world problem from Phase 6 is solved. Wave Function Collapse generates spatially coherent terrain — rivers, mountains, villages, swamps — that creates the rugged fitness landscape evolution needs. **Crafting up 4-10x. Tool monoculture broken. Crystal specialists emerge. Best fitness doubles at 1M ticks.**
+
+- **WFC biome engine** — 7 biome types (clearing, forest, mountain, swamp, village, river, bridge), bitwise constraint propagation, anchor-seeded generation with BFS reachability verification. Ported from `emergent-adventure/poc/wfc`.
+- **Biome-aware resource spawning** — clearings: 60% food, no items. Mountains: 10% food, crystals + weapons. Villages: all items, forges. Swamps: 5% food, poison hazards. Each biome spawns its specialty.
+- **River barriers with bridge chokepoints** — rivers are impassable, bridges are the only crossing. Creates natural trade routes and population fragmentation.
+- **Ring0Biome sensor** (slot 26) — NPCs can read their current biome type, enabling evolution of biome-conditional behavior.
+- **Swamp hazard** — 5% chance per tick of -5 HP, +3 stress. Punishing to traverse.
+- **`--biomes` flag** — opt-in, fully backward compatible. Biome map printed in snapshots.
+
+Key findings across 4 seeds, 100k ticks, 200 NPCs:
+
+| Metric | Biomes | Flat | Delta |
+|--------|--------|------|-------|
+| Crafted items | **19** | **4** | **+383%** |
+| Crystal NPCs | **2** | **0** | biomes-only |
+| Compass holders | **15** | **3** | **+364%** |
+| Tool holders | 3 | 28 | -88% (monoculture broken) |
+| Trades | 22k | 29k | -23% (river fragmentation) |
+
+At 1M ticks (200 NPCs): best fitness **1,199 vs 569** (+111%). Biome specialists outlive generalists. The crafting pipeline (mountain crystals -> village forges -> compass/shield) actually functions end-to-end.
+
+```
+Biome Map (32x32, seed 42):
+==TT####..HH^^TT^^^^TT####....TT    . = Clearing  T = Forest
+........HH^^^^^^^^HH..TT####HH##    ^ = Mountain  ~ = Swamp
+HH##TT..HH^^HHHH^^HHHH..HH..##..   H = Village   = = River
+##......HHHH####TT####TT##TT##TT    # = Bridge
+```
+
+```bash
+# Biome run with map
+go run ./cmd/sandbox --npcs 200 --ticks 100000 --seed 42 --biomes --snap-every 25000
+
+# Compare biomes vs flat
+go run ./cmd/sandbox --npcs 200 --ticks 100000 --seed 42 --biomes 2>&1 | tail -5
+go run ./cmd/sandbox --npcs 200 --ticks 100000 --seed 42 2>&1 | tail -5
+```
+
+See [WFC Biome Generation](reports/2026-03-02-008-wfc-biome-generation.md) for full data, 1M-tick results, and tuning proposals.
+
 ### Phase 6 — Crossover Analytics & A/B Tuning (2026-03-02)
 
 Growth/exchange crossover shipped. Now we know what it does — and what the *real* bottleneck is.
@@ -639,6 +681,7 @@ Every N ticks, the GA replaces the bottom 25% with offspring from the top 50% vi
 | 23 | on_forge | 1 if standing on forge tile |
 | 24 | my_age | remaining life (MaxAge - age) |
 | 25 | taught | times genome was modified by others |
+| 26 | biome | biome type at position (0-6, biomes mode) |
 
 ### Ring1 Actions (writable, read by scheduler)
 
@@ -838,11 +881,13 @@ The seed genomes are cross-validated between Go and Z80 VMs (`testdata/sandbox/c
 
 | File | Description |
 |------|-------------|
-| `pkg/sandbox/world.go` | Auto-scaled tile world, OccGrid, bounded search |
+| `pkg/sandbox/world.go` | Auto-scaled tile world, OccGrid, bounded search, biome integration |
 | `pkg/sandbox/npc.go` | NPC struct, Ring0/Ring1 slot definitions |
-| `pkg/sandbox/scheduler.go` | Tick loop: sense, think, act, decay |
+| `pkg/sandbox/scheduler.go` | Tick loop: sense, think, act, decay, biome hazards |
+| `pkg/sandbox/wfc.go` | WFC biome engine: 7 types, constraint propagation, anchors, reachability |
 | `pkg/sandbox/ga.go` | Genetic algorithm engine |
-| `pkg/sandbox/sandbox_test.go` | Unit + e2e + scaling tests (36+ tests) |
+| `pkg/sandbox/sandbox_test.go` | Unit + e2e + scaling tests (54+ tests) |
+| `pkg/sandbox/wfc_test.go` | WFC generation, anchors, reachability, constraint, biome integration tests |
 | `cmd/sandbox/main.go` | CLI runner with flags |
 | `z80/sandbox.asm` | Z80 sandbox (scheduler + world + NPC init) |
 | `z80/ga.asm` | Z80 GA (tournament-2, point mutation) |
@@ -884,6 +929,8 @@ See [`reports/`](reports/) for detailed design documentation:
 | [Scaling to 10,000 NPCs](reports/2026-03-01-004-scaling-10k-npcs.md) | Decoupled tiles, bounded search, auto-scale architecture |
 | [Temporal Dynamics](reports/2026-03-01-005-temporal-dynamics.md) | Multi-scale temporal analysis with charts: villages to metropolises |
 | [Crossover Analytics](reports/2026-03-02-006-crossover-analytics.md) | Growth/exchange vs classic crossover: 13-seed A/B comparison |
+| [Cross-Project Synthesis](reports/2026-03-02-007-cross-project-synthesis.md) | Unifying PSIL + WFC geography + fractal narrative theory |
+| [WFC Biome Generation](reports/2026-03-02-008-wfc-biome-generation.md) | Rivers create specialists: 4-10x crafting, crystal economy, 2x fitness at 1M ticks |
 
 ### Guides & Plans
 

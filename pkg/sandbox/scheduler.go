@@ -181,6 +181,13 @@ func (s *Scheduler) sense(npc *NPC) {
 	vm.MemWrite(Ring0MyAge, int16(MaxAge-npc.Age))
 	vm.MemWrite(Ring0Taught, int16(npc.Taught))
 
+	// Biome sensor
+	if w.Biomes && w.BiomeGrid != nil {
+		vm.MemWrite(Ring0Biome, int16(w.BiomeGrid[w.idx(npc.X, npc.Y)]))
+	} else {
+		vm.MemWrite(Ring0Biome, 0)
+	}
+
 	// Effective gas: base + modifier bonus with diminishing returns
 	gasBonus := 0
 	add := npc.ModSum(ModGas)
@@ -272,12 +279,31 @@ func (s *Scheduler) act(npc *NPC) {
 
 	if w.InBounds(nx, ny) {
 		dest := w.TileAt(nx, ny)
-		if dest.Type() != TileWall && w.OccAt(nx, ny) == 0 {
+		blocked := dest.Type() == TileWall || w.OccAt(nx, ny) != 0
+		// River tiles block movement (biome-aware)
+		if !blocked && w.Biomes && w.BiomeGrid != nil {
+			b := w.BiomeGrid[w.idx(nx, ny)]
+			if !BiomeTable[b].Passable {
+				blocked = true
+			}
+		}
+		if !blocked {
 			// Clear old occupancy
 			w.ClearOcc(npc.X, npc.Y)
 			npc.X = nx
 			npc.Y = ny
 			w.SetOcc(npc.X, npc.Y, npc.ID)
+		}
+	}
+
+	// Swamp hazard: 5% chance per tick of -5 health, +3 stress
+	if w.Biomes && w.BiomeGrid != nil && w.BiomeGrid[w.idx(npc.X, npc.Y)] == BiomeSwamp {
+		if w.Rng.Intn(20) == 0 {
+			npc.Health -= 5
+			npc.Stress += 3
+			if npc.Stress > 100 {
+				npc.Stress = 100
+			}
 		}
 	}
 

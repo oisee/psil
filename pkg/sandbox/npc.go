@@ -31,6 +31,7 @@ const (
 	Ring0OnForge   = 23 // 1 if standing on forge tile, 0 otherwise
 	Ring0MyAge     = 24 // remaining life (MaxAge - Age)
 	Ring0Taught    = 25 // number of times genome was modified by others
+	Ring0Biome     = 26 // biome type at NPC position (0-6), 0 if biomes disabled
 	Ring0ExtCount  = 28 // extended Ring0 slot count
 )
 

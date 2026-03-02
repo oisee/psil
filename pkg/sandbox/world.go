@@ -63,6 +63,10 @@ type World struct {
 
 	// Poison tile lifetimes: grid index → tick when placed
 	PoisonTTL map[int]int
+
+	// Biome system (WFC-generated)
+	BiomeGrid []byte // parallel to Grid, BiomeClearing..BiomeBridge per cell
+	Biomes    bool   // true if WFC biomes are active
 }
 
 // NewWorld creates a Size×Size world.
@@ -99,6 +103,135 @@ func NewWorld(size int, rng *rand.Rand) *World {
 	}
 
 	return w
+}
+
+// NewWorldWithBiomes creates a world with WFC-generated biome terrain.
+// WFC runs at half resolution (each biome cell = 2x2 world tiles).
+func NewWorldWithBiomes(size int, rng *rand.Rand) *World {
+	w := &World{
+		Size:      size,
+		Grid:      make([]Tile, size*size),
+		OccGrid:   make([]uint16, size*size),
+		NPCs:      make([]*NPC, 0, 32),
+		npcByID:   make(map[uint16]*NPC),
+		FoodRate:  0.25,
+		MaxFood:   size * 3 / 4,
+		ItemRate:  0.05,
+		MaxItems:  size / 4,
+		Rng:       rng,
+		NextID:    1,
+		PoisonTTL: make(map[int]int),
+		Biomes:    true,
+	}
+
+	// WFC at half resolution
+	wfcW, wfcH := size/2, size/2
+	if wfcW < 4 {
+		wfcW = 4
+	}
+	if wfcH < 4 {
+		wfcH = 4
+	}
+
+	biomeGrid, ok := GenerateBiomeGrid(wfcW, wfcH, rng, 10)
+	if !ok {
+		// Fallback: all clearing (flat world)
+		w.BiomeGrid = make([]byte, size*size)
+		w.placeForgesFlat(size, rng)
+		return w
+	}
+
+	// Expand to full resolution
+	w.BiomeGrid = ExpandBiomeGrid(biomeGrid, wfcW, wfcH, 2)
+
+	// If world size is odd, the expansion may be slightly off; truncate/pad to exact size
+	needed := size * size
+	if len(w.BiomeGrid) < needed {
+		expanded := make([]byte, needed)
+		copy(expanded, w.BiomeGrid)
+		w.BiomeGrid = expanded
+	} else if len(w.BiomeGrid) > needed {
+		w.BiomeGrid = w.BiomeGrid[:needed]
+	}
+
+	// Set river tiles as walls so existing pathfinding treats them as blocked
+	for i, b := range w.BiomeGrid {
+		if b == BiomeRiver {
+			w.Grid[i] = MakeTile(TileWall)
+		}
+	}
+
+	// Place forges on Mountain/Village biome tiles
+	w.placeBiomeForges(rng)
+
+	return w
+}
+
+// placeBiomeForges places forges only on Mountain and Village biome cells.
+func (w *World) placeBiomeForges(rng *rand.Rand) {
+	var villageCells, mountainCells []int
+	for i, b := range w.BiomeGrid {
+		switch b {
+		case BiomeVillage:
+			villageCells = append(villageCells, i)
+		case BiomeMountain:
+			mountainCells = append(mountainCells, i)
+		}
+	}
+
+	numForges := len(villageCells)/8 + len(mountainCells)/16
+	if numForges < 3 {
+		numForges = 3
+	}
+
+	// Shuffle candidates and place forges
+	candidates := make([]int, 0, len(villageCells)+len(mountainCells))
+	candidates = append(candidates, villageCells...)
+	candidates = append(candidates, mountainCells...)
+	rng.Shuffle(len(candidates), func(i, j int) {
+		candidates[i], candidates[j] = candidates[j], candidates[i]
+	})
+
+	placed := 0
+	for _, idx := range candidates {
+		if placed >= numForges {
+			break
+		}
+		if w.Grid[idx].Type() == TileEmpty {
+			y := idx / w.Size
+			x := idx % w.Size
+			w.SetTile(x, y, MakeTile(TileForge))
+			placed++
+		}
+	}
+
+	// If not enough biome cells, place remaining forges randomly on passable tiles
+	for placed < numForges {
+		x := rng.Intn(w.Size)
+		y := rng.Intn(w.Size)
+		if w.TileAt(x, y).Type() == TileEmpty && w.BiomeGrid[w.idx(x, y)] != BiomeRiver {
+			w.SetTile(x, y, MakeTile(TileForge))
+			placed++
+		}
+	}
+}
+
+// placeForgesFlat places forges randomly (fallback for non-biome worlds).
+func (w *World) placeForgesFlat(size int, rng *rand.Rand) {
+	numForges := size / 8
+	if numForges < 3 {
+		numForges = 3
+	}
+	for i := 0; i < numForges; i++ {
+		for tries := 0; tries < 50; tries++ {
+			x := rng.Intn(size)
+			y := rng.Intn(size)
+			if w.TileAt(x, y).Type() == TileEmpty {
+				w.SetTile(x, y, MakeTile(TileForge))
+				break
+			}
+		}
+	}
 }
 
 func (w *World) idx(x, y int) int {
@@ -177,7 +310,20 @@ func (w *World) Spawn(npc *NPC) bool {
 	tileOk := func(x, y int) bool {
 		t := w.TileAt(x, y)
 		typ := t.Type()
-		return (typ == TileEmpty || typ == TileForge) && w.OccAt(x, y) == 0
+		if typ != TileEmpty && typ != TileForge {
+			return false
+		}
+		if w.OccAt(x, y) != 0 {
+			return false
+		}
+		// In biome mode, don't spawn on impassable biomes
+		if w.Biomes && w.BiomeGrid != nil {
+			b := w.BiomeGrid[w.idx(x, y)]
+			if !BiomeTable[b].Passable {
+				return false
+			}
+		}
+		return true
 	}
 	if !tileOk(npc.X, npc.Y) {
 		// Try random placement
@@ -236,11 +382,19 @@ func (w *World) RespawnFood() {
 		for tries := 0; tries < 50; tries++ {
 			x := w.Rng.Intn(w.Size)
 			y := w.Rng.Intn(w.Size)
-			if w.TileAt(x, y).Type() == TileEmpty && w.OccAt(x, y) == 0 {
-				w.SetTile(x, y, MakeTile(TileFood))
-				w.FoodSpawned++
-				break
+			if w.TileAt(x, y).Type() != TileEmpty || w.OccAt(x, y) != 0 {
+				continue
 			}
+			// Biome-aware: use per-biome food rate
+			if w.Biomes && w.BiomeGrid != nil {
+				biome := w.BiomeGrid[w.idx(x, y)]
+				if w.Rng.Float64() > BiomeTable[biome].FoodRate {
+					continue
+				}
+			}
+			w.SetTile(x, y, MakeTile(TileFood))
+			w.FoodSpawned++
+			break
 		}
 	}
 }
@@ -464,21 +618,52 @@ func (w *World) RespawnItems() {
 	for tries := 0; tries < 50; tries++ {
 		x := w.Rng.Intn(w.Size)
 		y := w.Rng.Intn(w.Size)
-		if w.TileAt(x, y).Type() == TileEmpty && w.OccAt(x, y) == 0 {
-			if w.Rng.Intn(10) == 0 {
+		if w.TileAt(x, y).Type() != TileEmpty || w.OccAt(x, y) != 0 {
+			continue
+		}
+
+		// Biome-aware item spawning
+		if w.Biomes && w.BiomeGrid != nil {
+			biome := w.BiomeGrid[w.idx(x, y)]
+			props := &BiomeTable[biome]
+
+			// Check biome item rate
+			if w.Rng.Float64() > props.ItemRate {
+				continue
+			}
+
+			// Biome poison chance
+			if props.Poison > 0 && w.Rng.Float64() < props.Poison {
 				w.SetTile(x, y, MakeTile(TilePoison))
 				w.PoisonTTL[w.idx(x, y)] = w.Tick
-			} else {
-				var itemType byte
-				if w.Rng.Intn(20) == 0 {
-					itemType = TileCrystal // 1-in-20 chance
-				} else {
-					itemType = byte(TileTool + w.Rng.Intn(3))
-				}
-				w.SetTile(x, y, MakeTile(itemType))
+				return
 			}
-			break
+
+			// No items in this biome
+			if len(props.ItemTypes) == 0 {
+				continue
+			}
+
+			// Pick from biome-allowed item types
+			itemType := props.ItemTypes[w.Rng.Intn(len(props.ItemTypes))]
+			w.SetTile(x, y, MakeTile(itemType))
+			return
 		}
+
+		// Non-biome (original) logic
+		if w.Rng.Intn(10) == 0 {
+			w.SetTile(x, y, MakeTile(TilePoison))
+			w.PoisonTTL[w.idx(x, y)] = w.Tick
+		} else {
+			var itemType byte
+			if w.Rng.Intn(20) == 0 {
+				itemType = TileCrystal // 1-in-20 chance
+			} else {
+				itemType = byte(TileTool + w.Rng.Intn(3))
+			}
+			w.SetTile(x, y, MakeTile(itemType))
+		}
+		break
 	}
 }
 
