@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"io"
 	"math/rand"
 	"testing"
@@ -1815,4 +1816,124 @@ func TestScaling100NPCs(t *testing.T) {
 		t.Errorf("expected >20 alive after 5k ticks with 100 NPCs, got %d", alive)
 	}
 	t.Logf("100 NPCs on %dx%d world: alive=%d after 5k ticks", ws, ws, alive)
+}
+
+func TestNovelSegments(t *testing.T) {
+	// Identical genomes → 0 novel segments
+	a := []byte{micro.SmallNumOp(5), micro.OpDup, micro.OpAdd, micro.OpHalt}
+	novel := novelSegments(a, a)
+	if len(novel) != 0 {
+		t.Errorf("identical genomes should have 0 novel segments, got %d", len(novel))
+	}
+
+	// Disjoint genomes → multiple novel segments
+	b := []byte{micro.SmallNumOp(10), micro.OpSub, micro.OpPrint, micro.OpYield}
+	novel = novelSegments(a, b)
+	if len(novel) == 0 {
+		t.Error("disjoint genomes should have novel segments")
+	}
+
+	// B with one unique instruction among shared ones
+	c := []byte{micro.SmallNumOp(5), micro.OpSub, micro.OpAdd, micro.OpHalt}
+	novel = novelSegments(a, c)
+	found := false
+	for _, seg := range novel {
+		if len(seg) == 1 && seg[0] == micro.OpSub {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected OpSub as novel segment, got %v", novel)
+	}
+}
+
+func TestCrossoverGrowthMode(t *testing.T) {
+	// Small parents (30 bytes each), B has unique instructions
+	rng := rand.New(rand.NewSource(123))
+	ga := &GA{Rng: rng, MutationRate: 0.8}
+
+	// Build parent A: 28 bytes of known ops + halt
+	a := make([]byte, 0, 30)
+	for i := 0; i < 29; i++ {
+		a = append(a, micro.SmallNumOp(1))
+	}
+	a = append(a, micro.OpHalt)
+
+	// Build parent B: 28 bytes of different ops + halt
+	b := make([]byte, 0, 30)
+	for i := 0; i < 29; i++ {
+		b = append(b, micro.OpDup)
+	}
+	b = append(b, micro.OpHalt)
+
+	grew := 0
+	containsNovel := 0
+	trials := 50
+	for i := 0; i < trials; i++ {
+		child := ga.crossover(a, b)
+		if len(child) > len(a) {
+			grew++
+		}
+		if len(child) > MaxGenome {
+			t.Fatalf("child exceeds MaxGenome: %d", len(child))
+		}
+		if bytes.Contains(child, []byte{micro.OpDup}) {
+			containsNovel++
+		}
+	}
+	if grew == 0 {
+		t.Error("expected at least one growth-mode crossover in 50 trials")
+	}
+	if containsNovel == 0 {
+		t.Error("expected novel bytes from parent B to appear in at least one child")
+	}
+	t.Logf("growth mode: %d/%d grew, %d/%d contain novel material", grew, trials, containsNovel, trials)
+}
+
+func TestCrossoverExchangeMode(t *testing.T) {
+	// Parent A near MaxGenome (120 bytes), B has novel material
+	rng := rand.New(rand.NewSource(456))
+	ga := &GA{Rng: rng, MutationRate: 0.8}
+
+	a := make([]byte, 120)
+	for i := range a {
+		a[i] = micro.SmallNumOp(1)
+	}
+	a[119] = micro.OpHalt
+
+	b := make([]byte, 30)
+	for i := range b {
+		b[i] = micro.OpDup
+	}
+	b[29] = micro.OpHalt
+
+	for i := 0; i < 50; i++ {
+		child := ga.crossover(a, b)
+		if len(child) > MaxGenome {
+			t.Fatalf("trial %d: child exceeds MaxGenome: %d", i, len(child))
+		}
+		if len(child) < MinGenome {
+			t.Fatalf("trial %d: child below MinGenome: %d", i, len(child))
+		}
+	}
+}
+
+func TestCrossoverClassicFallback(t *testing.T) {
+	// Two identical parents → no novel segments → falls back to classic
+	rng := rand.New(rand.NewSource(789))
+	ga := &GA{Rng: rng, MutationRate: 0.8}
+
+	a := []byte{micro.SmallNumOp(5), micro.OpDup, micro.OpAdd, micro.OpHalt}
+	b := make([]byte, len(a))
+	copy(b, a)
+
+	for i := 0; i < 50; i++ {
+		child := ga.crossover(a, b)
+		if len(child) < MinGenome {
+			t.Fatalf("trial %d: child below MinGenome: %d", i, len(child))
+		}
+		if len(child) > MaxGenome {
+			t.Fatalf("trial %d: child exceeds MaxGenome: %d", i, len(child))
+		}
+	}
 }

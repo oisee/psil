@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"math/rand"
 	"sort"
 
@@ -103,37 +104,94 @@ func (ga *GA) tournamentSelect(pool []*NPC) *NPC {
 	return best
 }
 
-// crossover performs instruction-aligned single-point crossover.
+// novelSegments returns instruction-aligned segments from b
+// that do not appear as contiguous byte subsequences in a.
+func novelSegments(a, b []byte) [][]byte {
+	pointsB := OpcodeAlignedPoints(b)
+	var novel [][]byte
+	for i := 0; i < len(pointsB)-1; i++ {
+		seg := b[pointsB[i]:pointsB[i+1]]
+		if len(seg) > 0 && !bytes.Contains(a, seg) {
+			novel = append(novel, seg)
+		}
+	}
+	return novel
+}
+
+// enforceBounds pads to MinGenome with NOPs and truncates to MaxGenome.
+func enforceBounds(child []byte) []byte {
+	for len(child) < MinGenome {
+		child = append(child, micro.OpNop)
+	}
+	if len(child) > MaxGenome {
+		child = child[:MaxGenome]
+	}
+	return child
+}
+
+// classicCrossover performs instruction-aligned single-point crossover.
+func (ga *GA) classicCrossover(a, b []byte, pointsA, pointsB []int) []byte {
+	splitA := pointsA[ga.Rng.Intn(len(pointsA))]
+	splitB := pointsB[ga.Rng.Intn(len(pointsB))]
+	child := make([]byte, 0, splitA+len(b)-splitB)
+	child = append(child, a[:splitA]...)
+	child = append(child, b[splitB:]...)
+	return enforceBounds(child)
+}
+
+// crossover performs growth/exchange crossover with classic fallback.
 func (ga *GA) crossover(a, b []byte) []byte {
 	pointsA := OpcodeAlignedPoints(a)
 	pointsB := OpcodeAlignedPoints(b)
 
 	if len(pointsA) < 2 || len(pointsB) < 2 {
-		// Can't crossover, return copy of better parent (a)
 		r := make([]byte, len(a))
 		copy(r, a)
 		return r
 	}
 
-	splitA := pointsA[ga.Rng.Intn(len(pointsA))]
-	splitB := pointsB[ga.Rng.Intn(len(pointsB))]
+	// 20% classic crossover for diversity
+	if ga.Rng.Float64() < 0.20 {
+		return ga.classicCrossover(a, b, pointsA, pointsB)
+	}
 
-	child := make([]byte, 0, splitA+len(b)-splitB)
-	child = append(child, a[:splitA]...)
-	child = append(child, b[splitB:]...)
+	// Find novel instruction segments from B not present in A
+	novel := novelSegments(a, b)
+	if len(novel) == 0 {
+		return ga.classicCrossover(a, b, pointsA, pointsB)
+	}
 
-	// Enforce size limits
-	if len(child) < MinGenome {
-		// Pad with NOPs
-		for len(child) < MinGenome {
-			child = append(child, micro.OpNop)
+	// Pick one random novel segment
+	seg := novel[ga.Rng.Intn(len(novel))]
+
+	if len(a)+len(seg) <= MaxGenome {
+		// === GROWTH MODE ===
+		// Append novel segment before terminal instruction (halt/yield)
+		insertAt := len(a)
+		if len(pointsA) >= 2 {
+			lastInstrStart := pointsA[len(pointsA)-2]
+			lastOp := a[lastInstrStart]
+			if lastOp == micro.OpHalt || lastOp == micro.OpYield {
+				insertAt = lastInstrStart
+			}
 		}
-	}
-	if len(child) > MaxGenome {
-		child = child[:MaxGenome]
+		child := make([]byte, 0, len(a)+len(seg))
+		child = append(child, a[:insertAt]...)
+		child = append(child, seg...)
+		child = append(child, a[insertAt:]...)
+		return enforceBounds(child)
 	}
 
-	return child
+	// === EXCHANGE MODE ===
+	// Replace a random aligned instruction block in A with the novel segment
+	delIdx := ga.Rng.Intn(len(pointsA) - 1)
+	delStart := pointsA[delIdx]
+	delEnd := pointsA[delIdx+1]
+	child := make([]byte, 0, len(a)-(delEnd-delStart)+len(seg))
+	child = append(child, a[:delStart]...)
+	child = append(child, seg...)
+	child = append(child, a[delEnd:]...)
+	return enforceBounds(child)
 }
 
 // opcodeAlignedPoints returns valid instruction boundaries in bytecode.
