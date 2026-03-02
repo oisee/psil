@@ -28,6 +28,9 @@ type timePoint struct {
 	holders     int // NPCs with items
 	crafted     int // shield+compass holders
 	crystalNPCs int
+	genomeMin   int
+	genomeMax   int
+	genomeAvg   int
 }
 
 // Trader genome: goal-based navigation
@@ -137,51 +140,59 @@ var crafterGenome = []byte{
 	0xF1,       // yield
 }
 
-func main() {
-	npcs := flag.Int("npcs", 20, "number of NPCs")
-	worldSize := flag.Int("world", 0, "world size (NxN), 0=auto")
-	ticks := flag.Int("ticks", 10000, "number of ticks to simulate")
-	gas := flag.Int("gas", 200, "gas limit per NPC brain")
-	evolveEvery := flag.Int("evolve-every", 100, "ticks between evolution rounds")
-	seed := flag.Int64("seed", 42, "random seed")
-	verbose := flag.Bool("verbose", false, "verbose output")
-	traderFrac := flag.Float64("traders", 0.25, "fraction of initial population seeded with trader genome")
-	snapEvery := flag.Int("snap-every", 0, "print spatial snapshot every N ticks (0=off)")
-	timelineEvery := flag.Int("timeline", 0, "sample stats every N ticks for sparkline chart (0=auto ~80 cols)")
-	csvOut := flag.Bool("csv", false, "output timeline as CSV to stdout")
-	flag.Parse()
+type simConfig struct {
+	npcs, worldSize, ticks, gas, evolveEvery int
+	seed                                     int64
+	traderFrac                               float64
+	verbose                                  bool
+	snapEvery, tlEvery                       int
+	crossoverMode                            sandbox.CrossoverMode
+	classicRate                              float64
+}
 
-	rng := rand.New(rand.NewSource(*seed))
+type simResult struct {
+	timeline  []timePoint
+	alive     int
+	avgFit    int
+	bestFit   int
+	trades    int
+	teaches   int
+	genomeAvg int
+	totalGold int
+}
+
+func runSimulation(cfg simConfig) simResult {
+	rng := rand.New(rand.NewSource(cfg.seed))
 
 	// Auto-scale world size
-	ws := *worldSize
+	ws := cfg.worldSize
 	if ws == 0 {
-		ws = sandbox.AutoWorldSize(*npcs)
+		ws = sandbox.AutoWorldSize(cfg.npcs)
 	}
 
 	w := sandbox.NewWorld(ws, rng)
-	w.MaxFood = *npcs * 3
+	w.MaxFood = cfg.npcs * 3
 	w.FoodRate = 0.5
-	maxItems := *npcs / 2
+	maxItems := cfg.npcs / 2
 	if maxItems < 4 {
 		maxItems = 4
 	}
 	w.MaxItems = maxItems
 	ga := sandbox.NewGA(rng)
+	ga.Mode = cfg.crossoverMode
+	ga.ClassicRate = cfg.classicRate
 
-	// Discard NPC brain output (no print spam)
-	sched := sandbox.NewScheduler(w, *gas, io.Discard)
+	sched := sandbox.NewScheduler(w, cfg.gas, io.Discard)
 
-	numTraders := int(float64(*npcs) * *traderFrac)
-	numForagers := *npcs / 4   // 25% foragers for stable food gathering
-	numCrafters := *npcs / 10  // 10% crafters to bootstrap crafting behavior
-	numTeachers := *npcs / 20  // 5% teachers for memetic transmission
+	numTraders := int(float64(cfg.npcs) * cfg.traderFrac)
+	numForagers := cfg.npcs / 4
+	numCrafters := cfg.npcs / 10
+	numTeachers := cfg.npcs / 20
 	if numTeachers < 1 {
 		numTeachers = 1
 	}
 
-	// Spawn initial population
-	for i := 0; i < *npcs; i++ {
+	for i := 0; i < cfg.npcs; i++ {
 		var genome []byte
 		if i < numTraders {
 			genome = make([]byte, len(traderGenome))
@@ -201,25 +212,21 @@ func main() {
 		npc := sandbox.NewNPC(genome)
 		npc.X = rng.Intn(ws)
 		npc.Y = rng.Intn(ws)
-		// Give seeded traders a starting item
 		if i < numTraders {
 			npc.Item = byte(sandbox.ItemTool + rng.Intn(3))
 		}
-		// Give seeded crafters a starting tool
 		if i >= numTraders+numForagers && i < numTraders+numForagers+numCrafters {
 			npc.Item = sandbox.ItemTool
 		}
-		// Give seeded teachers a starting item
 		if i >= numTraders+numForagers+numCrafters && i < numTraders+numForagers+numCrafters+numTeachers {
 			npc.Item = byte(sandbox.ItemTool + rng.Intn(3))
 		}
 		w.Spawn(npc)
 	}
 
-	// Seed some food
 	seedFood := ws
-	if seedFood < *npcs {
-		seedFood = *npcs
+	if seedFood < cfg.npcs {
+		seedFood = cfg.npcs
 	}
 	for i := 0; i < seedFood; i++ {
 		x := rng.Intn(ws)
@@ -229,36 +236,32 @@ func main() {
 		}
 	}
 
-	reportInterval := *evolveEvery
+	reportInterval := cfg.evolveEvery
 	if reportInterval < 1 {
 		reportInterval = 100
 	}
 
-	// Timeline sampling interval
-	tlEvery := *timelineEvery
+	tlEvery := cfg.tlEvery
 	if tlEvery <= 0 {
-		tlEvery = *ticks / 80
+		tlEvery = cfg.ticks / 80
 		if tlEvery < 1 {
 			tlEvery = 1
 		}
 	}
 	var timeline []timePoint
 
-	for tick := 0; tick < *ticks; tick++ {
+	for tick := 0; tick < cfg.ticks; tick++ {
 		sched.Tick()
 
-		// Timeline sampling
 		if tick%tlEvery == 0 {
 			timeline = append(timeline, sampleStats(w, sched, tick))
 		}
 
-		// Evolution
-		if tick > 0 && tick%*evolveEvery == 0 {
+		if tick > 0 && tick%cfg.evolveEvery == 0 {
 			w.NPCs = ga.Evolve(w.NPCs)
 
-			// Respawn dead NPCs if population too low — mix of traders, foragers, crafters
 			refillIdx := 0
-			for len(w.NPCs) < *npcs/2 {
+			for len(w.NPCs) < cfg.npcs/2 {
 				var genome []byte
 				switch refillIdx % 6 {
 				case 0:
@@ -288,24 +291,46 @@ func main() {
 			}
 		}
 
-		// Periodic report
-		if *verbose && tick%reportInterval == 0 {
+		if cfg.verbose && tick%reportInterval == 0 {
 			printStatus(w, sched, tick)
 		}
 
-		// Spatial snapshot
-		if *snapEvery > 0 && tick > 0 && tick%*snapEvery == 0 {
+		if cfg.snapEvery > 0 && tick > 0 && tick%cfg.snapEvery == 0 {
 			printSnapshot(w, sched, tick)
 		}
 
-		// Bail if everyone died
 		if len(w.NPCs) == 0 {
 			fmt.Fprintf(os.Stderr, "Population extinct at tick %d\n", tick)
 			break
 		}
 	}
 
-	// Final report
+	// Collect final stats
+	res := simResult{
+		timeline: timeline,
+		alive:    len(w.NPCs),
+		trades:   sched.TradeCount,
+		teaches:  sched.TeachCount,
+	}
+	totalFit := 0
+	totalGenome := 0
+	for _, npc := range w.NPCs {
+		totalFit += npc.Fitness
+		if npc.Fitness > res.bestFit {
+			res.bestFit = npc.Fitness
+		}
+		res.totalGold += npc.Gold
+		totalGenome += len(npc.Genome)
+	}
+	if res.alive > 0 {
+		res.avgFit = totalFit / res.alive
+		res.genomeAvg = totalGenome / res.alive
+	}
+
+	return res
+}
+
+func printFinalReport(cfg simConfig, w *sandbox.World, sched *sandbox.Scheduler) {
 	fmt.Fprintf(os.Stderr, "\n=== Final Stats (tick %d) ===\n", w.Tick)
 	fmt.Fprintf(os.Stderr, "alive=%d food_on_map=%d items_on_map=%d total_food_spawned=%d trades=%d teaches=%d\n",
 		len(w.NPCs), w.FoodCount(), w.ItemCount(), w.FoodSpawned, sched.TradeCount, sched.TeachCount)
@@ -340,7 +365,6 @@ func main() {
 	fmt.Fprintf(os.Stderr, "total_gold=%d crystal_npcs=%d crafted_items=%d total_crafts=%d avg_stress=%d taught=%d teach_count=%d\n",
 		totalGold, crystalNPCs, craftedItems, totalCrafts, totalStress/max(len(w.NPCs), 1), totalTaught, totalTeachCount)
 
-	// Item distribution
 	itemCounts := make(map[byte]int)
 	for _, npc := range w.NPCs {
 		if npc.Item != sandbox.ItemNone {
@@ -357,7 +381,6 @@ func main() {
 	}
 	fmt.Fprintln(os.Stderr)
 
-	// Guru leaderboard — top teachers by TeachCount
 	type guru struct {
 		id         uint16
 		teachCount int
@@ -371,7 +394,6 @@ func main() {
 		}
 	}
 	if len(gurus) > 0 {
-		// Sort descending by teach count (simple selection for top 5)
 		for i := 0; i < len(gurus) && i < 5; i++ {
 			best := i
 			for j := i + 1; j < len(gurus); j++ {
@@ -403,17 +425,280 @@ func main() {
 		}
 		fmt.Fprintln(os.Stderr)
 	}
+}
 
-	// Timeline output
-	if *csvOut {
+// runFullSimulation runs a simulation and prints all output (for non-AB mode).
+func runFullSimulation(cfg simConfig, csvOut bool) {
+	rng := rand.New(rand.NewSource(cfg.seed))
+
+	ws := cfg.worldSize
+	if ws == 0 {
+		ws = sandbox.AutoWorldSize(cfg.npcs)
+	}
+
+	w := sandbox.NewWorld(ws, rng)
+	w.MaxFood = cfg.npcs * 3
+	w.FoodRate = 0.5
+	maxItems := cfg.npcs / 2
+	if maxItems < 4 {
+		maxItems = 4
+	}
+	w.MaxItems = maxItems
+	ga := sandbox.NewGA(rng)
+	ga.Mode = cfg.crossoverMode
+	ga.ClassicRate = cfg.classicRate
+
+	sched := sandbox.NewScheduler(w, cfg.gas, io.Discard)
+
+	numTraders := int(float64(cfg.npcs) * cfg.traderFrac)
+	numForagers := cfg.npcs / 4
+	numCrafters := cfg.npcs / 10
+	numTeachers := cfg.npcs / 20
+	if numTeachers < 1 {
+		numTeachers = 1
+	}
+
+	for i := 0; i < cfg.npcs; i++ {
+		var genome []byte
+		if i < numTraders {
+			genome = make([]byte, len(traderGenome))
+			copy(genome, traderGenome)
+		} else if i < numTraders+numForagers {
+			genome = make([]byte, len(foragerGenome))
+			copy(genome, foragerGenome)
+		} else if i < numTraders+numForagers+numCrafters {
+			genome = make([]byte, len(crafterGenome))
+			copy(genome, crafterGenome)
+		} else if i < numTraders+numForagers+numCrafters+numTeachers {
+			genome = make([]byte, len(teacherGenome))
+			copy(genome, teacherGenome)
+		} else {
+			genome = ga.RandomGenome(24 + rng.Intn(16))
+		}
+		npc := sandbox.NewNPC(genome)
+		npc.X = rng.Intn(ws)
+		npc.Y = rng.Intn(ws)
+		if i < numTraders {
+			npc.Item = byte(sandbox.ItemTool + rng.Intn(3))
+		}
+		if i >= numTraders+numForagers && i < numTraders+numForagers+numCrafters {
+			npc.Item = sandbox.ItemTool
+		}
+		if i >= numTraders+numForagers+numCrafters && i < numTraders+numForagers+numCrafters+numTeachers {
+			npc.Item = byte(sandbox.ItemTool + rng.Intn(3))
+		}
+		w.Spawn(npc)
+	}
+
+	seedFood := ws
+	if seedFood < cfg.npcs {
+		seedFood = cfg.npcs
+	}
+	for i := 0; i < seedFood; i++ {
+		x := rng.Intn(ws)
+		y := rng.Intn(ws)
+		if w.TileAt(x, y).Type() == sandbox.TileEmpty && w.OccAt(x, y) == 0 {
+			w.SetTile(x, y, sandbox.MakeTile(sandbox.TileFood))
+		}
+	}
+
+	reportInterval := cfg.evolveEvery
+	if reportInterval < 1 {
+		reportInterval = 100
+	}
+
+	tlEvery := cfg.tlEvery
+	if tlEvery <= 0 {
+		tlEvery = cfg.ticks / 80
+		if tlEvery < 1 {
+			tlEvery = 1
+		}
+	}
+	var timeline []timePoint
+
+	for tick := 0; tick < cfg.ticks; tick++ {
+		sched.Tick()
+
+		if tick%tlEvery == 0 {
+			timeline = append(timeline, sampleStats(w, sched, tick))
+		}
+
+		if tick > 0 && tick%cfg.evolveEvery == 0 {
+			w.NPCs = ga.Evolve(w.NPCs)
+
+			refillIdx := 0
+			for len(w.NPCs) < cfg.npcs/2 {
+				var genome []byte
+				switch refillIdx % 6 {
+				case 0:
+					genome = make([]byte, len(traderGenome))
+					copy(genome, traderGenome)
+				case 1:
+					genome = make([]byte, len(crafterGenome))
+					copy(genome, crafterGenome)
+				case 2:
+					genome = make([]byte, len(teacherGenome))
+					copy(genome, teacherGenome)
+				default:
+					genome = make([]byte, len(foragerGenome))
+					copy(genome, foragerGenome)
+				}
+				npc := sandbox.NewNPC(genome)
+				npc.X = rng.Intn(ws)
+				npc.Y = rng.Intn(ws)
+				if refillIdx%5 == 0 {
+					npc.Item = byte(sandbox.ItemTool + rng.Intn(3))
+				}
+				if refillIdx%5 == 1 {
+					npc.Item = sandbox.ItemTool
+				}
+				w.Spawn(npc)
+				refillIdx++
+			}
+		}
+
+		if cfg.verbose && tick%reportInterval == 0 {
+			printStatus(w, sched, tick)
+		}
+
+		if cfg.snapEvery > 0 && tick > 0 && tick%cfg.snapEvery == 0 {
+			printSnapshot(w, sched, tick)
+		}
+
+		if len(w.NPCs) == 0 {
+			fmt.Fprintf(os.Stderr, "Population extinct at tick %d\n", tick)
+			break
+		}
+	}
+
+	printFinalReport(cfg, w, sched)
+
+	if csvOut {
 		printCSV(timeline, os.Stdout)
 	}
 	if len(timeline) > 1 {
 		printTimeline(timeline, tlEvery)
 	}
 
-	// Final snapshot
 	printSnapshot(w, sched, w.Tick)
+}
+
+func printABComparison(cfg simConfig, growth, classic simResult) {
+	fmt.Fprintf(os.Stderr, "\n=== A/B Comparison (seed=%d, npcs=%d, ticks=%d) ===\n",
+		cfg.seed, cfg.npcs, cfg.ticks)
+	fmt.Fprintf(os.Stderr, "%-16s %10s %10s %10s\n", "", "Growth", "Classic", "Delta")
+
+	type row struct {
+		label   string
+		g, c    int
+	}
+	rows := []row{
+		{"alive", growth.alive, classic.alive},
+		{"avgFit", growth.avgFit, classic.avgFit},
+		{"bestFit", growth.bestFit, classic.bestFit},
+		{"trades", growth.trades, classic.trades},
+		{"teaches", growth.teaches, classic.teaches},
+		{"genomeAvg", growth.genomeAvg, classic.genomeAvg},
+		{"totalGold", growth.totalGold, classic.totalGold},
+	}
+
+	for _, r := range rows {
+		delta := r.g - r.c
+		sign := "+"
+		if delta < 0 {
+			sign = ""
+		}
+		fmt.Fprintf(os.Stderr, "%-16s %10d %10d %10s%d\n", r.label, r.g, r.c, sign, delta)
+	}
+
+	// Paired sparklines
+	type pairedMetric struct {
+		label string
+		fn    func(timePoint) int
+	}
+	paired := []pairedMetric{
+		{"avgFit", func(tp timePoint) int { return tp.avgFit }},
+		{"bestFit", func(tp timePoint) int { return tp.bestFit }},
+		{"genomeAvg", func(tp timePoint) int { return tp.genomeAvg }},
+		{"alive", func(tp timePoint) int { return tp.alive }},
+		{"trades", func(tp timePoint) int { return tp.trades }},
+	}
+
+	fmt.Fprintln(os.Stderr)
+	for _, m := range paired {
+		gVals := extractField(growth.timeline, m.fn)
+		cVals := extractField(classic.timeline, m.fn)
+		fmt.Fprintln(os.Stderr, sparkline(m.label+" (G)", gVals))
+		fmt.Fprintln(os.Stderr, sparkline(m.label+" (C)", cVals))
+	}
+}
+
+func main() {
+	npcs := flag.Int("npcs", 20, "number of NPCs")
+	worldSize := flag.Int("world", 0, "world size (NxN), 0=auto")
+	ticks := flag.Int("ticks", 10000, "number of ticks to simulate")
+	gas := flag.Int("gas", 200, "gas limit per NPC brain")
+	evolveEvery := flag.Int("evolve-every", 100, "ticks between evolution rounds")
+	seed := flag.Int64("seed", 42, "random seed")
+	verbose := flag.Bool("verbose", false, "verbose output")
+	traderFrac := flag.Float64("traders", 0.25, "fraction of initial population seeded with trader genome")
+	snapEvery := flag.Int("snap-every", 0, "print spatial snapshot every N ticks (0=off)")
+	timelineEvery := flag.Int("timeline", 0, "sample stats every N ticks for sparkline chart (0=auto ~80 cols)")
+	csvOut := flag.Bool("csv", false, "output timeline as CSV to stdout")
+	crossover := flag.String("crossover", "growth", "crossover mode: growth or classic")
+	classicRate := flag.Float64("classic-rate", 0.20, "classic crossover fraction (0-1)")
+	ab := flag.Bool("ab", false, "run both growth and classic modes, print comparison")
+	flag.Parse()
+
+	var mode sandbox.CrossoverMode
+	switch strings.ToLower(*crossover) {
+	case "classic":
+		mode = sandbox.CrossoverClassic
+	default:
+		mode = sandbox.CrossoverGrowth
+	}
+
+	tlEvery := *timelineEvery
+	if tlEvery <= 0 {
+		tlEvery = *ticks / 80
+		if tlEvery < 1 {
+			tlEvery = 1
+		}
+	}
+
+	cfg := simConfig{
+		npcs:          *npcs,
+		worldSize:     *worldSize,
+		ticks:         *ticks,
+		gas:           *gas,
+		evolveEvery:   *evolveEvery,
+		seed:          *seed,
+		traderFrac:    *traderFrac,
+		verbose:       *verbose,
+		snapEvery:     *snapEvery,
+		tlEvery:       tlEvery,
+		crossoverMode: mode,
+		classicRate:   *classicRate,
+	}
+
+	if *ab {
+		// A/B mode: run both, suppress snapshots/verbose, print comparison
+		abCfg := cfg
+		abCfg.verbose = false
+		abCfg.snapEvery = 0
+
+		abCfg.crossoverMode = sandbox.CrossoverGrowth
+		fmt.Fprintf(os.Stderr, "Running growth mode...\n")
+		growthResult := runSimulation(abCfg)
+
+		abCfg.crossoverMode = sandbox.CrossoverClassic
+		fmt.Fprintf(os.Stderr, "Running classic mode...\n")
+		classicResult := runSimulation(abCfg)
+
+		printABComparison(cfg, growthResult, classicResult)
+	} else {
+		runFullSimulation(cfg, *csvOut)
+	}
 }
 
 func printStatus(w *sandbox.World, sched *sandbox.Scheduler, tick int) {
@@ -586,14 +871,16 @@ func centroid(npcs []*sandbox.NPC) (int, int) {
 
 func sampleStats(w *sandbox.World, sched *sandbox.Scheduler, tick int) timePoint {
 	tp := timePoint{
-		tick:   tick,
-		trades: sched.TradeCount,
-		teaches: sched.TeachCount,
-		food:   w.FoodCount(),
-		items:  w.ItemCount(),
+		tick:      tick,
+		trades:    sched.TradeCount,
+		teaches:   sched.TeachCount,
+		food:      w.FoodCount(),
+		items:     w.ItemCount(),
+		genomeMin: math.MaxInt,
 	}
 	totalFit := 0
 	totalStress := 0
+	totalGenome := 0
 	for _, npc := range w.NPCs {
 		if !npc.Alive() {
 			continue
@@ -602,6 +889,14 @@ func sampleStats(w *sandbox.World, sched *sandbox.Scheduler, tick int) timePoint
 		totalFit += npc.Fitness
 		tp.gold += npc.Gold
 		totalStress += npc.Stress
+		gl := len(npc.Genome)
+		totalGenome += gl
+		if gl < tp.genomeMin {
+			tp.genomeMin = gl
+		}
+		if gl > tp.genomeMax {
+			tp.genomeMax = gl
+		}
 		if npc.Fitness > tp.bestFit {
 			tp.bestFit = npc.Fitness
 		}
@@ -618,6 +913,10 @@ func sampleStats(w *sandbox.World, sched *sandbox.Scheduler, tick int) timePoint
 	if tp.alive > 0 {
 		tp.avgFit = totalFit / tp.alive
 		tp.avgStress = totalStress / tp.alive
+		tp.genomeAvg = totalGenome / tp.alive
+	}
+	if tp.genomeMin == math.MaxInt {
+		tp.genomeMin = 0
 	}
 	return tp
 }
@@ -697,6 +996,9 @@ func printTimeline(timeline []timePoint, interval int) {
 		{"holders", func(tp timePoint) int { return tp.holders }, false},
 		{"crafted", func(tp timePoint) int { return tp.crafted }, false},
 		{"crystalNPC", func(tp timePoint) int { return tp.crystalNPCs }, false},
+		{"genomeMin", func(tp timePoint) int { return tp.genomeMin }, false},
+		{"genomeMax", func(tp timePoint) int { return tp.genomeMax }, false},
+		{"genomeAvg", func(tp timePoint) int { return tp.genomeAvg }, false},
 	}
 
 	for _, m := range metrics {
@@ -716,6 +1018,7 @@ func printCSV(timeline []timePoint, w io.Writer) {
 	cw.Write([]string{
 		"tick", "alive", "trades", "teaches", "gold", "avg_stress",
 		"food", "items", "avg_fit", "best_fit", "holders", "crafted", "crystal_npcs",
+		"genome_min", "genome_max", "genome_avg",
 	})
 	for _, tp := range timeline {
 		cw.Write([]string{
@@ -732,6 +1035,9 @@ func printCSV(timeline []timePoint, w io.Writer) {
 			strconv.Itoa(tp.holders),
 			strconv.Itoa(tp.crafted),
 			strconv.Itoa(tp.crystalNPCs),
+			strconv.Itoa(tp.genomeMin),
+			strconv.Itoa(tp.genomeMax),
+			strconv.Itoa(tp.genomeAvg),
 		})
 	}
 	cw.Flush()

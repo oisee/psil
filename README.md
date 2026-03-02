@@ -2,6 +2,30 @@
 
 ## Changelog
 
+### Phase 6 — Crossover Analytics & A/B Tuning (2026-03-02)
+
+Growth/exchange crossover shipped. Now we know what it does — and what the *real* bottleneck is.
+
+- **Growth/exchange crossover** (`7d0bc92`) — novel crossover operator that finds instruction segments in parent B absent from parent A, inserts them before `yield`/`halt` (growth mode), or replaces a random block when at MaxGenome (exchange mode). 80/20 mix with classic fallback.
+- **A/B comparison mode** (`--ab`) — runs growth and classic crossover with identical seeds, prints side-by-side table + paired sparklines
+- **Tunable classic rate** (`--classic-rate 0.20`) — fraction of crossovers using classic single-point instead of growth/exchange
+- **Crossover mode selection** (`--crossover growth|classic`) — run either mode exclusively
+- **Genome size tracking** — `genomeMin`, `genomeMax`, `genomeAvg` sparklines and CSV columns show genome evolution over time
+- **Comparison chart tool** (`tools/plot_ab_comparison.py`) — 6-panel matplotlib chart comparing growth vs classic across all metrics
+
+Key findings from 13-seed A/B comparison (200 NPCs, 10k ticks):
+- Growth crossover produces **35% more trades** (wins 9/13 seeds, mean +394)
+- Average fitness is modestly higher (+45 mean, wins 8/13)
+- Peak fitness is high-variance — growth finds higher peaks but with wider misses
+- Genome size does NOT grow: both modes converge to ~19 bytes (the forager monoculture wins regardless)
+- The fitness landscape is the bottleneck, not the crossover operator
+
+| Growth (80/20 mix) | Classic (single-point only) |
+|:-:|:-:|
+| ![Growth](docs/images/sandbox/timeline-growth-200npcs.png) | ![Classic](docs/images/sandbox/timeline-classic-200npcs.png) |
+
+See [Crossover Analytics](reports/2026-03-02-006-crossover-analytics.md) for full A/B data, classic rate sweep, and proposals for making the fitness landscape more interesting.
+
 ### Phase 5 — Temporal Statistics & Visualization (2026-03-01)
 
 Time-as-axis output for watching simulations unfold. ASCII sparklines, CSV export, matplotlib charts, and Mermaid diagrams — all from a single `--csv` flag.
@@ -784,7 +808,8 @@ The Z80 version runs 16 NPCs on a 32x32 grid with a simplified GA (tournament-2 
 The GA engine (`pkg/sandbox/ga.go`) implements:
 
 - **Tournament selection**: pick 3 random NPCs, best fitness wins
-- **Instruction-aligned crossover**: walks both parent genomes opcode-by-opcode to find valid split points, then concatenates prefix of parent A with suffix of parent B
+- **Growth/exchange crossover** (default): finds novel instruction segments in parent B that are absent from parent A, then either *grows* the genome by inserting before `yield`/`halt`, or *exchanges* by replacing a random block when at MaxGenome. Falls back to classic single-point crossover 20% of the time (tunable via `--classic-rate`). Produces 35% more trades than classic-only crossover across 13 seeds.
+- **Classic crossover** (selectable via `--crossover classic`): instruction-aligned single-point crossover — walks both parent genomes opcode-by-opcode to find valid split points, concatenates prefix of parent A with suffix of parent B
 - **Six mutation operators**:
   1. Point mutation — replace one byte with a random valid opcode
   2. Insert — add a random opcode at a random position
@@ -793,7 +818,17 @@ The GA engine (`pkg/sandbox/ga.go`) implements:
   5. Block swap — swap two instruction-aligned segments
   6. Block duplicate — copy a short segment to another position
 
-Genome size is enforced between 16 and 128 bytes.
+Genome size is enforced between 16 and 128 bytes. Genome size statistics (`genomeMin`/`genomeMax`/`genomeAvg`) are tracked in sparklines and CSV output.
+
+Use `--ab` to run both crossover modes with the same seed and compare results:
+
+```bash
+go run ./cmd/sandbox --npcs 200 --ticks 10000 --seed 42 --ab
+```
+
+![A/B Comparison](docs/images/sandbox/crossover-ab-comparison.png)
+
+See [Crossover Analytics](reports/2026-03-02-006-crossover-analytics.md) for full analysis.
 
 ### Cross-Validation
 
@@ -813,6 +848,7 @@ The seed genomes are cross-validated between Go and Z80 VMs (`testdata/sandbox/c
 | `z80/ga.asm` | Z80 GA (tournament-2, point mutation) |
 | `testdata/sandbox/*.mpsil` | Seed genomes (forager, flee, random, trader) |
 | `testdata/sandbox/crossval_test.go` | Cross-validation tests |
+| `tools/plot_ab_comparison.py` | A/B crossover comparison chart |
 | `z80/build/sandbox.bin` | Prebuilt Z80 binary (2,818 bytes) |
 
 ## Architecture
@@ -847,6 +883,7 @@ See [`reports/`](reports/) for detailed design documentation:
 | [Emergent NPC Societies](reports/2026-03-01-001-emergent-npc-societies.md) | Trade, knowledge, memetics, and deception on concatenative bytecode |
 | [Scaling to 10,000 NPCs](reports/2026-03-01-004-scaling-10k-npcs.md) | Decoupled tiles, bounded search, auto-scale architecture |
 | [Temporal Dynamics](reports/2026-03-01-005-temporal-dynamics.md) | Multi-scale temporal analysis with charts: villages to metropolises |
+| [Crossover Analytics](reports/2026-03-02-006-crossover-analytics.md) | Growth/exchange vs classic crossover: 13-seed A/B comparison |
 
 ### Guides & Plans
 

@@ -13,10 +13,20 @@ const (
 	MaxGenome = 128
 )
 
+// CrossoverMode selects which crossover strategy the GA uses.
+type CrossoverMode int
+
+const (
+	CrossoverGrowth  CrossoverMode = iota // growth/exchange (default)
+	CrossoverClassic                      // classic single-point only
+)
+
 // GA is the genetic algorithm engine for evolving NPC genomes.
 type GA struct {
 	Rng          *rand.Rand
-	MutationRate float64 // probability of mutation per offspring (0-1)
+	MutationRate float64       // probability of mutation per offspring (0-1)
+	ClassicRate  float64       // fraction using classic crossover (default 0.20)
+	Mode         CrossoverMode // growth or classic-only
 }
 
 // NewGA creates a GA engine.
@@ -24,6 +34,7 @@ func NewGA(rng *rand.Rand) *GA {
 	return &GA{
 		Rng:          rng,
 		MutationRate: 0.8,
+		ClassicRate:  0.20,
 	}
 }
 
@@ -150,8 +161,13 @@ func (ga *GA) crossover(a, b []byte) []byte {
 		return r
 	}
 
-	// 20% classic crossover for diversity
-	if ga.Rng.Float64() < 0.20 {
+	// Classic-only mode: always use classic crossover
+	if ga.Mode == CrossoverClassic {
+		return ga.classicCrossover(a, b, pointsA, pointsB)
+	}
+
+	// Classic crossover for diversity (tunable rate)
+	if ga.Rng.Float64() < ga.ClassicRate {
 		return ga.classicCrossover(a, b, pointsA, pointsB)
 	}
 
