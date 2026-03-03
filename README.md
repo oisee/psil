@@ -2,6 +2,31 @@
 
 ## Changelog
 
+### Phase 11 — Evolved Brains Decoded: What 100k Ticks of Evolution Produce (2026-03-03)
+
+We disassembled the winning genomes from 6 simulation runs. Handcrafted archetypes are 17-27 bytes with 1-2 actions per tick. After 100k ticks of evolution, winning genomes are 42-128 bytes with 5-8 actions per tick and ~40% junk DNA. **Evolution produces working programs — not elegant ones, but programs that harvest, terraform, trade, and fight.**
+
+- **The Compact Farmer** (42 bytes, seed 999 × 400 NPCs) — `harvest → move → terraform → trade → harvest`. A 5-action farming loop in 24 effective bytes. The remaining 18 bytes are junk DNA that selection never removed.
+- **The Trader-Crafter** (89 bytes, seed 42) — craft → trade → trade → harvest → terraform → eat → trade. Seven yields per tick. A full economic agent: crafts items, trades obsessively, harvests, plants, eats.
+- **The Terraform Warrior** (128 bytes, seed 999 at 100k) — 80% farmer, 20% warrior. Core loop is terraform→harvest×6 with two `act.attack` opcodes buried at bytes 72 and 98. Attacks indiscriminately, farms obsessively. This genome was purged by tick 200k.
+- **The Healer-Trader** (94 bytes, seed 999 at 200k) — **Zero attacks.** Five harvest calls, two terraforms, one trade. Reads `Ring0Similarity` for kin awareness. The genome that replaced the warrior.
+- **Scaling effect** — 400 NPCs: 42-byte farmer wins. 200 NPCs: 94-byte healer-trader wins. More NPCs → simpler genomes, fewer fights, more tools (97 tools at 400 NPCs vs 39 at 200).
+
+```
+;; The Compact Farmer (42 bytes) — evolved, not designed
+000  act.harvest              ; extract from tile
+...
+011  yield
+012  act.terraform            ; plant food
+...
+020  act.trade                ; trade with neighbor
+022  act.harvest              ; harvest again
+024  yield
+025  ifte                     ; ← dead code (junk DNA)
+```
+
+See [Evolved Brains Decoded](reports/2026-03-03-012-evolved-brains-decoded.md) for full annotated disassembly of all winning genomes, junk DNA analysis, and scaling effects.
+
 ### Phase 10 — Warriors Become Healers: Emergent Phase Transitions (2026-03-03)
 
 Seed 999 produced a warrior culture at 100k ticks: 568k attacks, 7,907 kills. We doubled the run. **The warriors self-corrected.** Attacks dropped 93%, kills dropped 97%, heals exploded 15,450%, and trades went from 882 to 2 million. The most violent civilization became the most cooperative.
