@@ -2,6 +2,75 @@
 
 ## Changelog
 
+### Phase 9 — Action Opcodes, Combat & Farming: The Complexity Explosion (2026-03-03)
+
+Genomes were stuck at 20 bytes. A simple `sense_food → move → eat → yield` loop was the global optimum — no selective pressure for complexity. The fix: 9 two-byte action opcodes (`0x93`-`0x9B`), multi-yield coroutine brains, real combat damage, biome-based harvesting, terraforming, and food depletion. **Average genome size jumped 4.5x from 24 to 109 bytes. Warrior cultures emerge on some seeds while peaceful farming civilizations emerge on others.**
+
+- **Action opcodes** — `act.attack`, `act.heal`, `act.eat`, `act.harvest`, `act.terraform`, `act.trade`, `act.craft`, `act.share`, `act.move`. Each is 2 bytes (vs 9 for Ring1 writes). A single mutation discovers any action. Backward compatible with old genomes.
+- **Multi-yield coroutine brain** — `yield` no longer halts the VM. Scheduler executes the action, refreshes sensors, resumes brain. A 200-gas brain can execute 3-4 actions per tick.
+- **Combat** — Attack deals `5 + weapon_bonus - shield_defense` damage. Item theft on kill. Heal restores `5 + tool_bonus` HP. `Ring0Similarity` sensor enables kin selection.
+- **Biome harvesting** — Extract resources from tiles with per-tile cooldowns. Forest→food/tool. Mountain→weapon/crystal. Village→tool/treasure. Swamp→food/poison.
+- **Terraform** — Plant food on empty tiles. Clear forest/swamp. Costs 30 energy (tool reduces to 10).
+- **Food depletion** — `FoodRate *= 0.999` every 100 ticks. Halves every ~70k ticks. Floor at 0.02. Forces foraging→farming transition.
+- **3 new archetypes** — Farmer (terraform + eat), Fighter (attack + forage), Healer (kin-selective heal). Total 7 archetypes seeded.
+
+Key findings (4 seeds, 200 NPCs, 100k ticks):
+
+| Metric | Mean across seeds |
+|--------|------------------|
+| Genome size | 24 → **109 bytes** (+4.5x) |
+| GenomeMax | **128** (cap hit on all seeds) |
+| Terraforms | **27.7M** per run |
+| Harvests | **2.16M** per run |
+| Attacks | 146k (range: 2.7k–568k) |
+| Kills | 2,011 (range: 6–7,907) |
+| Heals | 3,259 |
+| Best fitness | **472k** (vs 7.3k in Phase 8) |
+
+Stochastic divergence: seed 999 produced a **warrior culture** (568k attacks, 7,907 kills) while seeds 42/7 produced **peaceful traders** (634k–1.07M trades, <12k attacks). Same mechanics, different evolutionary trajectories.
+
+500k-tick endgame (seed 42): FoodRate hit 0.02 floor. 537M terraforms. Gold collapsed to zero (trade worthless). Items shifted from compass to tool. Best fitness 941k. The farming phase transition is real.
+
+```bash
+# Standard run
+go run ./cmd/sandbox --npcs 200 --ticks 100000 --seed 42 --biomes --wfc-genome
+
+# Warrior seed
+go run ./cmd/sandbox --npcs 200 --ticks 100000 --seed 999 --biomes --wfc-genome
+
+# 500k endgame
+go run ./cmd/sandbox --npcs 200 --ticks 500000 --seed 42 --biomes --wfc-genome
+```
+
+See [Action Opcodes, Combat & Farming](reports/2026-03-03-010-action-opcodes-combat-farming.md) for full data, phase transition analysis, and WFC vs baseline comparison.
+
+### Phase 8 — WFC Genome Generation: Structure-Aware Brain Seeding (2026-03-03)
+
+Random genomes are mostly noise — 7% start with a sensor read, 0% have valid branches, and 35% contain a sense→act pattern. The fix: use 1D Wave Function Collapse to generate structurally valid genomes by mining bigram constraints from evolved winners and handcrafted archetypes. This is an Estimation of Distribution Algorithm — learn what instruction patterns work, then sample from that distribution.
+
+- **10 token types** — Sense, Push, Cmp, Branch, Move, Action, Target, Stack, Math, Yield. Opcodes classified into functional categories; WFC operates on types, not raw bytes.
+- **Constraint mining** — bigram extraction from top 25% genomes each evolution round + base constraints from 4 archetypes, merged via bitwise OR. The EDA feedback loop improves constraints as evolution discovers new patterns.
+- **1D WFC engine** — left-to-right collapse with forward constraint propagation. First token anchored to Sense, last to Yield. Branch offsets computed by forward scan to next Yield.
+- **`--wfc-genome` flag** — opt-in. 60% WFC-generated / 40% archetype refill split. Fully backward compatible.
+
+Structural quality (1000 genomes each):
+
+| Metric | Random | WFC (bootstrapped) |
+|--------|--------|-------------------|
+| Starts with sensor | 7% | **99%** |
+| Sense→act pattern | 35% | **89%** |
+| Valid branches | 0% | **100%** |
+| Token diversity | 6.1 | **7.2** |
+
+Sim fitness (100 NPCs, 5000 ticks, seed 42):
+
+| Metric | Random-only | WFC-genome | Delta |
+|--------|------------|------------|-------|
+| Best fitness | 3,942 | **7,269** | **+84%** |
+| Trades | 208 | **788** | **+279%** |
+
+See [WFC Genome Generation](reports/2026-03-03-009-wfc-genome-generation.md) for full metric explanations, token distribution analysis, and bootstrapping effects.
+
 ### Phase 7 — WFC Biome Generation: Geography Breaks the Monoculture (2026-03-02)
 
 The flat world problem from Phase 6 is solved. Wave Function Collapse generates spatially coherent terrain — rivers, mountains, villages, swamps — that creates the rugged fitness landscape evolution needs. **Crafting up 4-10x. Tool monoculture broken. Crystal specialists emerge. Best fitness doubles at 1M ticks.**

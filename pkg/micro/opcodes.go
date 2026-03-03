@@ -159,7 +159,19 @@ const (
 	OpRollN     = 0x90 // [n] roll nth element to top
 	OpLoopN     = 0x91 // [n] loop n times (next bytes = body)
 	OpString    = 0x92 // [len] followed by len bytes
-	// 0x93-0xBF reserved
+
+	// Action opcodes — write Ring1 + auto-yield (2 bytes each)
+	OpActMove      = 0x93 // [arg] move: 1-4=dir, 5=toward food, 6=toward NPC, 7=toward item
+	OpActAttack    = 0x94 // [0] attack nearest adjacent NPC
+	OpActHeal      = 0x95 // [0] heal nearest adjacent NPC
+	OpActEat       = 0x96 // [0] eat nearby food
+	OpActHarvest   = 0x97 // [0] harvest current tile (biome-based)
+	OpActTerraform = 0x98 // [0] terraform current tile
+	OpActShare     = 0x99 // [0] share energy with nearest adjacent NPC
+	OpActTrade     = 0x9A // [0] trade with nearest adjacent NPC
+	OpActCraft     = 0x9B // [0] craft held item
+
+	// 0x9C-0xBF reserved
 )
 
 // Is2ByteOp returns true if opcode is a 2-byte operation
@@ -242,6 +254,9 @@ func OpName(op byte) string {
 			OpRing1W: "r1!", OpInspect: "inspect", OpGas: "gas",
 			OpPickN: "pick.n", OpRollN: "roll.n", OpLoopN: "loop.n",
 			OpString: "str",
+			OpActMove: "act.move", OpActAttack: "act.attack", OpActHeal: "act.heal",
+			OpActEat: "act.eat", OpActHarvest: "act.harvest", OpActTerraform: "act.terra",
+			OpActShare: "act.share", OpActTrade: "act.trade", OpActCraft: "act.craft",
 		}
 		if n, ok := names[op]; ok {
 			return n

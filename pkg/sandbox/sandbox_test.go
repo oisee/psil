@@ -1937,3 +1937,207 @@ func TestCrossoverClassicFallback(t *testing.T) {
 		}
 	}
 }
+
+// === Action Opcode Tests ===
+
+// spawnAt creates an NPC at a specific position and registers it with the world.
+func spawnAt(w *World, npc *NPC, x, y int) {
+	npc.X = x
+	npc.Y = y
+	w.Spawn(npc)
+}
+
+func TestActionOpcodeAttack(t *testing.T) {
+	w := NewWorld(16, testRng())
+	s := NewScheduler(w, 200, io.Discard)
+
+	attacker := NewNPC([]byte{micro.OpActAttack, 0x00, micro.OpHalt})
+	spawnAt(w, attacker, 5, 5)
+	attacker.Energy = 100
+
+	victim := NewNPC([]byte{micro.OpHalt})
+	spawnAt(w, victim, 5, 4)
+
+	initialHP := victim.Health
+
+	s.Tick()
+
+	if victim.Health >= initialHP {
+		t.Errorf("victim should have taken damage: before=%d after=%d", initialHP, victim.Health)
+	}
+	if attacker.Energy >= 100 {
+		t.Errorf("attacker should have spent energy: %d", attacker.Energy)
+	}
+}
+
+func TestActionOpcodeHeal(t *testing.T) {
+	w := NewWorld(16, testRng())
+	s := NewScheduler(w, 200, io.Discard)
+
+	healer := NewNPC([]byte{micro.OpActHeal, 0x00, micro.OpHalt})
+	spawnAt(w, healer, 5, 5)
+	healer.Energy = 100
+
+	patient := NewNPC([]byte{micro.OpHalt})
+	spawnAt(w, patient, 5, 4)
+	patient.Health = 50
+
+	s.Tick()
+
+	if patient.Health <= 50 {
+		t.Errorf("patient should have been healed: got %d", patient.Health)
+	}
+}
+
+func TestActionOpcodeMoveTowardFood(t *testing.T) {
+	w := NewWorld(16, testRng())
+	s := NewScheduler(w, 200, io.Discard)
+
+	w.SetTile(5, 3, MakeTile(TileFood))
+
+	npc := NewNPC([]byte{micro.OpActMove, 5, micro.OpHalt})
+	spawnAt(w, npc, 5, 5)
+
+	s.Tick()
+
+	if npc.Y >= 5 {
+		t.Errorf("NPC should have moved toward food: Y=%d (expected < 5)", npc.Y)
+	}
+}
+
+func TestActionOpcodeEat(t *testing.T) {
+	w := NewWorld(16, testRng())
+	s := NewScheduler(w, 200, io.Discard)
+
+	npc := NewNPC([]byte{micro.OpActEat, 0x00, micro.OpHalt})
+	spawnAt(w, npc, 5, 5)
+	npc.Energy = 50
+
+	// Place food at NPC's actual position (after spawn)
+	w.SetTile(npc.X, npc.Y, MakeTile(TileFood))
+
+	s.Tick()
+
+	if npc.FoodEaten == 0 {
+		t.Error("NPC should have eaten food")
+	}
+}
+
+func TestActionOpcodeHarvest(t *testing.T) {
+	w := NewWorldWithBiomes(16, testRng())
+	s := NewScheduler(w, 200, io.Discard)
+
+	// Find a forest tile
+	fx, fy := -1, -1
+	for y := 1; y < w.Size-1 && fx < 0; y++ {
+		for x := 1; x < w.Size-1; x++ {
+			if w.BiomeGrid[w.idx(x, y)] == BiomeForest && w.OccAt(x, y) == 0 {
+				fx, fy = x, y
+				break
+			}
+		}
+	}
+	if fx < 0 {
+		t.Skip("no forest tile found")
+	}
+
+	npc := NewNPC([]byte{micro.OpActHarvest, 0x00, micro.OpHalt})
+	spawnAt(w, npc, fx, fy)
+	npc.Energy = 100
+	initialEnergy := npc.Energy
+
+	s.Tick()
+
+	// Should have spent energy on harvest (5 for harvest + 1 for tick decay)
+	if npc.Energy >= initialEnergy {
+		t.Errorf("NPC should have spent energy on harvest: before=%d after=%d", initialEnergy, npc.Energy)
+	}
+
+	// Cooldown should be set
+	idx := w.idx(npc.X, npc.Y)
+	if w.Cooldowns[idx] == 0 {
+		t.Error("tile should have cooldown after harvest")
+	}
+}
+
+func TestActionOpcodeTerraform(t *testing.T) {
+	w := NewWorld(16, testRng())
+	s := NewScheduler(w, 200, io.Discard)
+
+	npc := NewNPC([]byte{micro.OpActTerraform, 0x00, micro.OpHalt})
+	spawnAt(w, npc, 5, 5)
+	npc.Energy = 200
+	// Ensure tile is empty
+	w.SetTile(npc.X, npc.Y, MakeTile(TileEmpty))
+
+	initialEnergy := npc.Energy
+	s.Tick()
+
+	// Terraform costs 30 energy. autoActions will auto-eat the planted food
+	// (since energy drops below 200). So we check energy was spent on terraform
+	// and then recovered by eating what was planted. Net: -30 (terraform) + 30 (eat) - 1 (decay) = -1
+	// The key signal is that terraform happened (energy spent differently than just decay).
+	energyDelta := initialEnergy - npc.Energy
+	if energyDelta < 1 {
+		t.Errorf("terraform should have cost energy: delta=%d", energyDelta)
+	}
+	// Also verify: NPC ate food (planted by terraform, consumed by autoActions)
+	if npc.FoodEaten == 0 {
+		t.Error("NPC should have auto-eaten the food it planted (proving terraform worked)")
+	}
+}
+
+func TestActionOpcodeMultiYield(t *testing.T) {
+	// Genome: move toward food, eat, halt.
+	// Two actions in one tick via auto-yield.
+	w := NewWorld(16, testRng())
+	s := NewScheduler(w, 200, io.Discard)
+
+	genome := []byte{
+		micro.OpActMove, 5,    // move toward food (auto-yield)
+		micro.OpActEat, 0x00,  // eat (auto-yield)
+		micro.OpHalt,
+	}
+	npc := NewNPC(genome)
+	spawnAt(w, npc, 5, 5)
+	npc.Energy = 50
+
+	// Place food one tile north of NPC
+	w.SetTile(npc.X, npc.Y-1, MakeTile(TileFood))
+	startY := npc.Y
+
+	s.Tick()
+
+	// NPC should have moved AND eaten in one tick
+	if npc.Y >= startY {
+		t.Errorf("NPC should have moved north, Y=%d (started at %d)", npc.Y, startY)
+	}
+	if npc.FoodEaten == 0 {
+		t.Error("NPC should have eaten food after moving")
+	}
+}
+
+func TestActionOpcodeBackwardCompat(t *testing.T) {
+	// Old-style genome using Ring1 writes + explicit yield
+	w := NewWorld(16, testRng())
+	s := NewScheduler(w, 200, io.Discard)
+
+	// Old style: r0@ foodDir, r1! move, push 1, r1! action, yield, halt
+	genome := []byte{
+		micro.OpRing0R, Ring0FoodDir,
+		micro.OpRing1W, Ring1Move,
+		micro.SmallNumOp(ActionEat),
+		micro.OpRing1W, Ring1Action,
+		micro.OpYield,
+		micro.OpHalt,
+	}
+	npc := NewNPC(genome)
+	spawnAt(w, npc, 5, 5)
+	npc.Energy = 50
+
+	w.SetTile(npc.X, npc.Y-1, MakeTile(TileFood))
+
+	// Should not panic — backward compatible
+	s.Tick()
+	t.Log("backward compat: old-style genome executed OK")
+}

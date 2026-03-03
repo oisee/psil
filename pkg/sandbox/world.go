@@ -64,6 +64,9 @@ type World struct {
 	// Poison tile lifetimes: grid index → tick when placed
 	PoisonTTL map[int]int
 
+	// Tile cooldowns for harvest (parallel to Grid, 0 = available)
+	Cooldowns []byte
+
 	// Biome system (WFC-generated)
 	BiomeGrid []byte // parallel to Grid, BiomeClearing..BiomeBridge per cell
 	Biomes    bool   // true if WFC biomes are active
@@ -84,6 +87,7 @@ func NewWorld(size int, rng *rand.Rand) *World {
 		Rng:       rng,
 		NextID:    1,
 		PoisonTTL: make(map[int]int),
+		Cooldowns: make([]byte, size*size),
 	}
 
 	// Place forges: max(3, size/8)
@@ -121,6 +125,7 @@ func NewWorldWithBiomes(size int, rng *rand.Rand) *World {
 		Rng:       rng,
 		NextID:    1,
 		PoisonTTL: make(map[int]int),
+		Cooldowns: make([]byte, size*size),
 		Biomes:    true,
 	}
 
@@ -247,6 +252,24 @@ func (w *World) TileAt(x, y int) Tile {
 		return Tile(TileWall)
 	}
 	return w.Grid[w.idx(x, y)]
+}
+
+// TileAhead returns the tile type one step in the given direction from (x,y).
+func (w *World) TileAhead(x, y int, dir byte) byte {
+	dx, dy := 0, 0
+	switch dir {
+	case DirNorth:
+		dy = -1
+	case DirEast:
+		dx = 1
+	case DirSouth:
+		dy = 1
+	case DirWest:
+		dx = -1
+	default:
+		dy = -1 // default: look north
+	}
+	return w.TileAt(x+dx, y+dy).Type()
 }
 
 func (w *World) SetTile(x, y int, t Tile) {

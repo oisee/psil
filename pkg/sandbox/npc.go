@@ -31,8 +31,12 @@ const (
 	Ring0OnForge   = 23 // 1 if standing on forge tile, 0 otherwise
 	Ring0MyAge     = 24 // remaining life (MaxAge - Age)
 	Ring0Taught    = 25 // number of times genome was modified by others
-	Ring0Biome     = 26 // biome type at NPC position (0-6), 0 if biomes disabled
-	Ring0ExtCount  = 28 // extended Ring0 slot count
+	Ring0Biome      = 26 // biome type at NPC position (0-6), 0 if biomes disabled
+	Ring0TileType   = 27 // tile type under NPC (food, tool, forge, etc.)
+	Ring0Similarity = 28 // genetic similarity to nearest NPC (0-100)
+	Ring0TileAhead  = 29 // tile type in move direction
+	Ring0Cooldown   = 30 // ticks remaining on current tile cooldown
+	Ring0ExtCount   = 31 // extended Ring0 slot count
 )
 
 // Ring1 action slots (writable by brain, read by scheduler)
@@ -55,13 +59,16 @@ const (
 
 // Action types
 const (
-	ActionIdle   = 0
-	ActionEat    = 1
-	ActionAttack = 2
-	ActionShare  = 3
-	ActionTrade  = 4
-	ActionCraft  = 5
-	ActionTeach  = 6
+	ActionIdle      = 0
+	ActionEat       = 1
+	ActionAttack    = 2
+	ActionShare     = 3
+	ActionTrade     = 4
+	ActionCraft     = 5
+	ActionTeach     = 6
+	ActionHeal      = 7
+	ActionHarvest   = 8
+	ActionTerraform = 9
 )
 
 // Item types
@@ -128,6 +135,7 @@ type NPC struct {
 	CraftCount int          // number of items crafted
 	Taught     int          // times this NPC's genome was externally modified
 	TeachCount int          // times this NPC successfully taught others
+	LastDir    byte         // last move direction (for tile-ahead sensor)
 }
 
 // Alive returns true if NPC is still alive.
@@ -142,6 +150,31 @@ func (n *NPC) Rand() byte {
 	n.RngState[1] = n.RngState[2]
 	n.RngState[2] = next
 	return next & 0x1F
+}
+
+// GenomeSimilarity returns 0-100 indicating how similar two genomes are.
+func GenomeSimilarity(a, b []byte) int {
+	if len(a) == 0 && len(b) == 0 {
+		return 100
+	}
+	maxLen := len(a)
+	if len(b) > maxLen {
+		maxLen = len(b)
+	}
+	if maxLen == 0 {
+		return 0
+	}
+	matches := 0
+	minLen := len(a)
+	if len(b) < minLen {
+		minLen = len(b)
+	}
+	for i := 0; i < minLen; i++ {
+		if a[i] == b[i] {
+			matches++
+		}
+	}
+	return matches * 100 / maxLen
 }
 
 // ModSum returns the total magnitude of all active modifiers of the given kind.

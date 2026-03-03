@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	MinGenome = 16
-	MaxGenome = 128
+	MinGenome         = 16
+	MaxGenome         = 128 // default; use GA.MaxGenomeSize to override
+	DefaultMaxGenome  = MaxGenome
 )
 
 // CrossoverMode selects which crossover strategy the GA uses.
@@ -23,10 +24,22 @@ const (
 
 // GA is the genetic algorithm engine for evolving NPC genomes.
 type GA struct {
-	Rng          *rand.Rand
-	MutationRate float64       // probability of mutation per offspring (0-1)
-	ClassicRate  float64       // fraction using classic crossover (default 0.20)
-	Mode         CrossoverMode // growth or classic-only
+	Rng              *rand.Rand
+	MutationRate     float64       // probability of mutation per offspring (0-1)
+	ClassicRate      float64       // fraction using classic crossover (default 0.20)
+	Mode             CrossoverMode // growth or classic-only
+	MaxGenomeSize    int           // 0 = use DefaultMaxGenome (128)
+	WFCEnabled       bool
+	Archetypes       [][]byte                // handcrafted seed genomes
+	MinedConstraints [NumTokenTypes]uint16   // latest mined constraints
+}
+
+// maxGenome returns the effective max genome size.
+func (ga *GA) maxGenome() int {
+	if ga.MaxGenomeSize > 0 {
+		return ga.MaxGenomeSize
+	}
+	return DefaultMaxGenome
 }
 
 // NewGA creates a GA engine.
@@ -54,6 +67,22 @@ func (ga *GA) Evolve(npcs []*NPC) []*NPC {
 	// Top 50% are breeding pool
 	poolSize := len(sorted) / 2
 	pool := sorted[:poolSize]
+
+	// Mine constraints from top 25% for WFC
+	if ga.WFCEnabled {
+		topN := poolSize / 2
+		if topN < 2 {
+			topN = 2
+		}
+		if topN > len(sorted) {
+			topN = len(sorted)
+		}
+		topGenomes := make([][]byte, topN)
+		for i := 0; i < topN; i++ {
+			topGenomes[i] = sorted[i].Genome
+		}
+		ga.UpdateConstraints(topGenomes)
+	}
 
 	// Collect victims: bottom 25% + any NPC at MaxAge
 	replaceCount := len(sorted) / 4
@@ -129,13 +158,14 @@ func novelSegments(a, b []byte) [][]byte {
 	return novel
 }
 
-// enforceBounds pads to MinGenome with NOPs and truncates to MaxGenome.
-func enforceBounds(child []byte) []byte {
+// enforceBounds pads to MinGenome with NOPs and truncates to max genome size.
+func (ga *GA) enforceBounds(child []byte) []byte {
+	mx := ga.maxGenome()
 	for len(child) < MinGenome {
 		child = append(child, micro.OpNop)
 	}
-	if len(child) > MaxGenome {
-		child = child[:MaxGenome]
+	if len(child) > mx {
+		child = child[:mx]
 	}
 	return child
 }
@@ -147,7 +177,7 @@ func (ga *GA) classicCrossover(a, b []byte, pointsA, pointsB []int) []byte {
 	child := make([]byte, 0, splitA+len(b)-splitB)
 	child = append(child, a[:splitA]...)
 	child = append(child, b[splitB:]...)
-	return enforceBounds(child)
+	return ga.enforceBounds(child)
 }
 
 // crossover performs growth/exchange crossover with classic fallback.
@@ -180,7 +210,8 @@ func (ga *GA) crossover(a, b []byte) []byte {
 	// Pick one random novel segment
 	seg := novel[ga.Rng.Intn(len(novel))]
 
-	if len(a)+len(seg) <= MaxGenome {
+	mx := ga.maxGenome()
+	if len(a)+len(seg) <= mx {
 		// === GROWTH MODE ===
 		// Append novel segment before terminal instruction (halt/yield)
 		insertAt := len(a)
@@ -195,7 +226,7 @@ func (ga *GA) crossover(a, b []byte) []byte {
 		child = append(child, a[:insertAt]...)
 		child = append(child, seg...)
 		child = append(child, a[insertAt:]...)
-		return enforceBounds(child)
+		return ga.enforceBounds(child)
 	}
 
 	// === EXCHANGE MODE ===
@@ -207,7 +238,7 @@ func (ga *GA) crossover(a, b []byte) []byte {
 	child = append(child, a[:delStart]...)
 	child = append(child, seg...)
 	child = append(child, a[delEnd:]...)
-	return enforceBounds(child)
+	return ga.enforceBounds(child)
 }
 
 // opcodeAlignedPoints returns valid instruction boundaries in bytecode.
@@ -250,6 +281,7 @@ func (ga *GA) mutate(genome []byte) []byte {
 		return genome
 	}
 
+	mx := ga.maxGenome()
 	op := ga.Rng.Intn(6)
 	switch op {
 	case 0: // Point mutation: replace one byte
@@ -260,7 +292,7 @@ func (ga *GA) mutate(genome []byte) []byte {
 		return g
 
 	case 1: // Insert: add 1 random opcode
-		if len(genome) >= MaxGenome {
+		if len(genome) >= mx {
 			return genome
 		}
 		pos := ga.Rng.Intn(len(genome) + 1)
@@ -343,7 +375,7 @@ func (ga *GA) mutate(genome []byte) []byte {
 		return g
 
 	case 5: // Block duplicate: copy a short segment elsewhere
-		if len(genome) >= MaxGenome-4 {
+		if len(genome) >= mx-4 {
 			return genome
 		}
 		points := OpcodeAlignedPoints(genome)
@@ -356,7 +388,7 @@ func (ga *GA) mutate(genome []byte) []byte {
 			end = len(points) - 1
 		}
 		seg := genome[points[src]:points[end]]
-		if len(genome)+len(seg) > MaxGenome {
+		if len(genome)+len(seg) > mx {
 			return genome
 		}
 		dst := ga.Rng.Intn(len(genome) + 1)
@@ -364,8 +396,8 @@ func (ga *GA) mutate(genome []byte) []byte {
 		g = append(g, genome[:dst]...)
 		g = append(g, seg...)
 		g = append(g, genome[dst:]...)
-		if len(g) > MaxGenome {
-			g = g[:MaxGenome]
+		if len(g) > mx {
+			g = g[:mx]
 		}
 		return g
 	}
@@ -407,11 +439,12 @@ func (ga *GA) randomOpcode() byte {
 
 // RandomGenome creates a random genome of the given size.
 func (ga *GA) RandomGenome(size int) []byte {
+	mx := ga.maxGenome()
 	if size < MinGenome {
 		size = MinGenome
 	}
-	if size > MaxGenome {
-		size = MaxGenome
+	if size > mx {
+		size = mx
 	}
 	g := make([]byte, size)
 	for i := range g {
@@ -420,6 +453,52 @@ func (ga *GA) RandomGenome(size int) []byte {
 	// Ensure it ends with halt
 	g[len(g)-1] = micro.OpHalt
 	return g
+}
+
+// UpdateConstraints mines bigram constraints from the top genomes.
+func (ga *GA) UpdateConstraints(topGenomes [][]byte) {
+	ga.MinedConstraints = MineConstraints(topGenomes)
+}
+
+// WFCGenome generates a structurally valid genome using 1D WFC.
+func (ga *GA) WFCGenome(size int) []byte {
+	merged := MergeConstraints(ga.MinedConstraints, BaseTokenConstraints(ga.Archetypes))
+
+	// Check if we have any constraints at all
+	hasConstraints := false
+	for _, c := range merged {
+		if c != 0 {
+			hasConstraints = true
+			break
+		}
+	}
+	if !hasConstraints {
+		return ga.RandomGenome(size)
+	}
+
+	numTokens := size / 2
+	if numTokens < 4 {
+		numTokens = 4
+	}
+
+	wfc := NewWFC1D(numTokens, merged, ga.Rng)
+
+	// Anchor first token as TokSense
+	if !wfc.Collapse(0, TokSense) {
+		return ga.RandomGenome(size)
+	}
+	// Anchor last token as TokYield
+	if !wfc.Collapse(numTokens-1, TokYield) {
+		return ga.RandomGenome(size)
+	}
+
+	if !wfc.Generate() {
+		return ga.RandomGenome(size)
+	}
+
+	tokens := wfc.ToTokens()
+	genome := RenderTokens(tokens, ga.Rng)
+	return ga.enforceBounds(genome)
 }
 
 func min(a, b int) int {

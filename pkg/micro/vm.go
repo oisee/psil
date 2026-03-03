@@ -48,6 +48,9 @@ type VM struct {
 
 	// Halted
 	Halted bool
+
+	// Yielded — set by OpYield, cleared by caller to resume
+	Yielded bool
 }
 
 // New creates a new VM
@@ -72,6 +75,7 @@ func (vm *VM) Reset() {
 	vm.AReg = 0
 	vm.CallSP = 0
 	vm.Halted = false
+	vm.Yielded = false
 	if vm.MaxGas > 0 {
 		vm.Gas = vm.MaxGas
 	}
@@ -415,7 +419,7 @@ func (vm *VM) Step() error {
 	case op == OpHalt:
 		vm.Halted = true
 	case op == OpYield:
-		vm.Halted = true
+		vm.Yielded = true
 		return nil
 	case op == OpEnd:
 		vm.Halted = true
@@ -736,6 +740,69 @@ func (vm *VM) exec2Byte(op, arg byte) error {
 	case OpString:
 		// Push string length and data pointer (simplified)
 		vm.PushInt(int(arg))
+
+	// === Action opcodes: write Ring1 + auto-yield ===
+	// Ring1 layout: slot 64+0=move, 64+1=action, 64+2=target, 64+3=emotion
+	// Ring0 sensors: slot 5=food dist, 7=near dist, 12=nearID, 13=foodDir, 18=nearDir, 19=itemDir
+
+	case OpActMove:
+		// arg 1-4: literal direction, 5=toward food, 6=toward NPC, 7=toward item
+		dir := int16(arg)
+		switch arg {
+		case 5:
+			dir = vm.MemRead(13) // Ring0FoodDir
+		case 6:
+			dir = vm.MemRead(18) // Ring0NearDir
+		case 7:
+			dir = vm.MemRead(19) // Ring0ItemDir
+		}
+		vm.MemWrite(64+0, dir) // Ring1Move
+		vm.Yielded = true
+		return nil
+
+	case OpActAttack:
+		vm.MemWrite(64+1, 2) // Ring1Action = ActionAttack
+		vm.MemWrite(64+2, vm.MemRead(12)) // Ring1Target = Ring0NearID
+		vm.Yielded = true
+		return nil
+
+	case OpActHeal:
+		vm.MemWrite(64+1, 7) // Ring1Action = ActionHeal
+		vm.MemWrite(64+2, vm.MemRead(12)) // Ring1Target = Ring0NearID
+		vm.Yielded = true
+		return nil
+
+	case OpActEat:
+		vm.MemWrite(64+1, 1) // Ring1Action = ActionEat
+		vm.Yielded = true
+		return nil
+
+	case OpActHarvest:
+		vm.MemWrite(64+1, 8) // Ring1Action = ActionHarvest
+		vm.Yielded = true
+		return nil
+
+	case OpActTerraform:
+		vm.MemWrite(64+1, 9) // Ring1Action = ActionTerraform
+		vm.Yielded = true
+		return nil
+
+	case OpActShare:
+		vm.MemWrite(64+1, 3) // Ring1Action = ActionShare
+		vm.MemWrite(64+2, vm.MemRead(12)) // Ring1Target = Ring0NearID
+		vm.Yielded = true
+		return nil
+
+	case OpActTrade:
+		vm.MemWrite(64+1, 4) // Ring1Action = ActionTrade
+		vm.MemWrite(64+2, vm.MemRead(12)) // Ring1Target = Ring0NearID
+		vm.Yielded = true
+		return nil
+
+	case OpActCraft:
+		vm.MemWrite(64+1, 5) // Ring1Action = ActionCraft
+		vm.Yielded = true
+		return nil
 	}
 
 	return nil
@@ -874,9 +941,9 @@ func (vm *VM) callBuiltin(n int) error {
 	return nil
 }
 
-// Run executes until halted or error
+// Run executes until halted, yielded, or error
 func (vm *VM) Run() error {
-	for !vm.Halted && !vm.CFlag {
+	for !vm.Halted && !vm.Yielded && !vm.CFlag {
 		if err := vm.Step(); err != nil {
 			return err
 		}

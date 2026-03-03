@@ -31,6 +31,11 @@ type timePoint struct {
 	genomeMin   int
 	genomeMax   int
 	genomeAvg   int
+	attacks     int // cumulative
+	kills       int // cumulative
+	heals       int // cumulative
+	harvests    int // cumulative
+	terraforms  int // cumulative
 }
 
 // Trader genome: goal-based navigation
@@ -140,6 +145,55 @@ var crafterGenome = []byte{
 	0xF1,       // yield
 }
 
+// Farmer genome (action opcodes): sense food → if scarce, terraform → else eat → yield
+// Uses multi-yield: move toward food, eat, then check if should plant.
+var farmerGenome = []byte{
+	0x93, 0x05, // act.move toward food
+	0x96, 0x00, // act.eat
+	0x8A, 0x02, // r0@ 2 (energy)
+	0x8A, 0x1B, // r0@ 27 (tile type)
+	0x20,       // push 0 (TileEmpty)
+	0x0B,       // = (tile is empty?)
+	0x88, 0x02, // jnz +2 → plant
+	0xF0,       // halt
+	0x98, 0x00, // act.terraform (plant food)
+	0xF0,       // halt
+}
+
+// Fighter genome (action opcodes): if near NPC adjacent → attack, else move toward
+var fighterGenome = []byte{
+	0x8A, 0x07, // r0@ 7 (near dist)
+	0x22,       // push 2
+	0x0C,       // < (dist < 2 → adjacent)
+	0x88, 0x04, // jnz +4 → attack
+	0x93, 0x06, // act.move toward nearest NPC
+	0xF0,       // halt
+	0x94, 0x00, // act.attack
+	0x93, 0x05, // act.move toward food (forage after attack)
+	0x96, 0x00, // act.eat
+	0xF0,       // halt
+}
+
+// Healer genome (action opcodes): if near NPC is kin (similarity > 50) → heal, else forage
+var healerGenome = []byte{
+	0x8A, 0x07, // r0@ 7 (near dist)
+	0x22,       // push 2
+	0x0C,       // < (adjacent?)
+	0x88, 0x0A, // jnz +10 → check kin
+	0x93, 0x05, // act.move toward food
+	0x96, 0x00, // act.eat
+	0xF0,       // halt
+	0x00, 0x00, 0x00, 0x00, // padding to reach offset
+	0x8A, 0x1C, // r0@ 28 (similarity)
+	0x8A, 0x07, // r0@ 7 (near dist — re-check)
+	0x22,       // push 2
+	0x0C,       // < (still adjacent?)
+	0x88, 0x02, // jnz +2 → heal
+	0xF0,       // halt
+	0x95, 0x00, // act.heal
+	0xF0,       // halt
+}
+
 type simConfig struct {
 	npcs, worldSize, ticks, gas, evolveEvery int
 	seed                                     int64
@@ -149,6 +203,8 @@ type simConfig struct {
 	crossoverMode                            sandbox.CrossoverMode
 	classicRate                              float64
 	biomes                                   bool
+	wfcGenome                                bool
+	maxGenome                                int
 }
 
 type simResult struct {
@@ -187,6 +243,14 @@ func runSimulation(cfg simConfig) simResult {
 	ga := sandbox.NewGA(rng)
 	ga.Mode = cfg.crossoverMode
 	ga.ClassicRate = cfg.classicRate
+	ga.MaxGenomeSize = cfg.maxGenome
+	if cfg.wfcGenome {
+		ga.WFCEnabled = true
+		ga.Archetypes = [][]byte{
+			traderGenome, foragerGenome, crafterGenome, teacherGenome,
+			farmerGenome, fighterGenome, healerGenome,
+		}
+	}
 
 	sched := sandbox.NewScheduler(w, cfg.gas, io.Discard)
 
@@ -269,19 +333,16 @@ func runSimulation(cfg simConfig) simResult {
 			refillIdx := 0
 			for len(w.NPCs) < cfg.npcs/2 {
 				var genome []byte
-				switch refillIdx % 6 {
-				case 0:
-					genome = make([]byte, len(traderGenome))
-					copy(genome, traderGenome)
-				case 1:
-					genome = make([]byte, len(crafterGenome))
-					copy(genome, crafterGenome)
-				case 2:
-					genome = make([]byte, len(teacherGenome))
-					copy(genome, teacherGenome)
-				default:
-					genome = make([]byte, len(foragerGenome))
-					copy(genome, foragerGenome)
+				if cfg.wfcGenome && refillIdx%5 < 3 {
+					genome = ga.WFCGenome(24 + rng.Intn(16))
+				} else {
+					archetypes := [][]byte{
+						traderGenome, foragerGenome, crafterGenome, teacherGenome,
+						farmerGenome, fighterGenome, healerGenome,
+					}
+					src := archetypes[refillIdx%len(archetypes)]
+					genome = make([]byte, len(src))
+					copy(genome, src)
 				}
 				npc := sandbox.NewNPC(genome)
 				npc.X = rng.Intn(ws)
@@ -370,6 +431,8 @@ func printFinalReport(cfg simConfig, w *sandbox.World, sched *sandbox.Scheduler)
 
 	fmt.Fprintf(os.Stderr, "total_gold=%d crystal_npcs=%d crafted_items=%d total_crafts=%d avg_stress=%d taught=%d teach_count=%d\n",
 		totalGold, crystalNPCs, craftedItems, totalCrafts, totalStress/max(len(w.NPCs), 1), totalTaught, totalTeachCount)
+	fmt.Fprintf(os.Stderr, "attacks=%d kills=%d heals=%d harvests=%d terraforms=%d food_rate=%.4f\n",
+		sched.AttackCount, sched.KillCount, sched.HealCount, sched.HarvestCount, sched.TerraformCount, w.FoodRate)
 
 	itemCounts := make(map[byte]int)
 	for _, npc := range w.NPCs {
@@ -458,6 +521,14 @@ func runFullSimulation(cfg simConfig, csvOut bool) {
 	ga := sandbox.NewGA(rng)
 	ga.Mode = cfg.crossoverMode
 	ga.ClassicRate = cfg.classicRate
+	ga.MaxGenomeSize = cfg.maxGenome
+	if cfg.wfcGenome {
+		ga.WFCEnabled = true
+		ga.Archetypes = [][]byte{
+			traderGenome, foragerGenome, crafterGenome, teacherGenome,
+			farmerGenome, fighterGenome, healerGenome,
+		}
+	}
 
 	sched := sandbox.NewScheduler(w, cfg.gas, io.Discard)
 
@@ -540,19 +611,16 @@ func runFullSimulation(cfg simConfig, csvOut bool) {
 			refillIdx := 0
 			for len(w.NPCs) < cfg.npcs/2 {
 				var genome []byte
-				switch refillIdx % 6 {
-				case 0:
-					genome = make([]byte, len(traderGenome))
-					copy(genome, traderGenome)
-				case 1:
-					genome = make([]byte, len(crafterGenome))
-					copy(genome, crafterGenome)
-				case 2:
-					genome = make([]byte, len(teacherGenome))
-					copy(genome, teacherGenome)
-				default:
-					genome = make([]byte, len(foragerGenome))
-					copy(genome, foragerGenome)
+				if cfg.wfcGenome && refillIdx%5 < 3 {
+					genome = ga.WFCGenome(24 + rng.Intn(16))
+				} else {
+					archetypes := [][]byte{
+						traderGenome, foragerGenome, crafterGenome, teacherGenome,
+						farmerGenome, fighterGenome, healerGenome,
+					}
+					src := archetypes[refillIdx%len(archetypes)]
+					genome = make([]byte, len(src))
+					copy(genome, src)
 				}
 				npc := sandbox.NewNPC(genome)
 				npc.X = rng.Intn(ws)
@@ -659,6 +727,8 @@ func main() {
 	crossover := flag.String("crossover", "growth", "crossover mode: growth or classic")
 	classicRate := flag.Float64("classic-rate", 0.20, "classic crossover fraction (0-1)")
 	biomes := flag.Bool("biomes", false, "enable WFC biome generation")
+	wfcGenome := flag.Bool("wfc-genome", false, "use WFC to generate structurally valid genomes")
+	maxGenome := flag.Int("max-genome", 128, "maximum genome size in bytes (default 128)")
 	ab := flag.Bool("ab", false, "run both growth and classic modes, print comparison")
 	flag.Parse()
 
@@ -692,6 +762,8 @@ func main() {
 		crossoverMode: mode,
 		classicRate:   *classicRate,
 		biomes:        *biomes,
+		wfcGenome:     *wfcGenome,
+		maxGenome:     *maxGenome,
 	}
 
 	if *ab {
@@ -944,6 +1016,11 @@ func sampleStats(w *sandbox.World, sched *sandbox.Scheduler, tick int) timePoint
 	if tp.genomeMin == math.MaxInt {
 		tp.genomeMin = 0
 	}
+	tp.attacks = sched.AttackCount
+	tp.kills = sched.KillCount
+	tp.heals = sched.HealCount
+	tp.harvests = sched.HarvestCount
+	tp.terraforms = sched.TerraformCount
 	return tp
 }
 
@@ -1025,6 +1102,11 @@ func printTimeline(timeline []timePoint, interval int) {
 		{"genomeMin", func(tp timePoint) int { return tp.genomeMin }, false},
 		{"genomeMax", func(tp timePoint) int { return tp.genomeMax }, false},
 		{"genomeAvg", func(tp timePoint) int { return tp.genomeAvg }, false},
+		{"attacks", func(tp timePoint) int { return tp.attacks }, true},
+		{"kills", func(tp timePoint) int { return tp.kills }, false},
+		{"heals", func(tp timePoint) int { return tp.heals }, false},
+		{"harvests", func(tp timePoint) int { return tp.harvests }, true},
+		{"terraforms", func(tp timePoint) int { return tp.terraforms }, false},
 	}
 
 	for _, m := range metrics {

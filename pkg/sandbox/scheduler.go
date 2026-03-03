@@ -23,8 +23,13 @@ type Scheduler struct {
 
 	vm           *micro.VM        // reusable VM instance
 	tradeIntents map[uint16]uint16 // NPC ID -> target NPC ID
-	TradeCount   int               // total bilateral trades completed
-	TeachCount   int               // total successful teach events
+	TradeCount     int               // total bilateral trades completed
+	TeachCount     int               // total successful teach events
+	AttackCount    int               // total attack actions executed
+	HealCount      int               // total heal actions executed
+	HarvestCount   int               // total harvest actions executed
+	TerraformCount int               // total terraform actions executed
+	KillCount      int               // total NPCs killed by attacks
 }
 
 // NewScheduler creates a scheduler for the given world.
@@ -123,10 +128,25 @@ func (s *Scheduler) Tick() {
 	w.RespawnFood()
 	w.RespawnItems()
 
+	// 6a. Food rate decay (forces transition to farming)
+	if w.Tick > 0 && w.Tick%100 == 0 && w.FoodRate > 0.02 {
+		w.FoodRate *= 0.999
+		if w.FoodRate < 0.02 {
+			w.FoodRate = 0.02 // floor: some natural food always spawns
+		}
+	}
+
 	// 6b. Decay poison tiles and trigger periodic blights
 	w.DecayPoison()
 	if w.Tick > 0 && w.Tick%1024 == 0 {
 		w.Blight()
+	}
+
+	// 6c. Decay tile cooldowns
+	for i := range w.Cooldowns {
+		if w.Cooldowns[i] > 0 {
+			w.Cooldowns[i]--
+		}
 	}
 
 	// 7. Score fitness (stress penalty, crafting bonus, teaching bonus)
@@ -188,6 +208,30 @@ func (s *Scheduler) sense(npc *NPC) {
 		vm.MemWrite(Ring0Biome, 0)
 	}
 
+	// Tile type under NPC
+	vm.MemWrite(Ring0TileType, int16(w.TileAt(npc.X, npc.Y).Type()))
+
+	// Genetic similarity to nearest NPC (0-100)
+	similarity := int16(0)
+	if nearNPCID != 0 {
+		nearNPC := w.NPCByID(nearNPCID)
+		if nearNPC != nil {
+			similarity = int16(GenomeSimilarity(npc.Genome, nearNPC.Genome))
+		}
+	}
+	vm.MemWrite(Ring0Similarity, similarity)
+
+	// Tile type ahead (in last move direction or north)
+	vm.MemWrite(Ring0TileAhead, int16(w.TileAhead(npc.X, npc.Y, npc.LastDir)))
+
+	// Cooldown on current tile
+	idx := w.idx(npc.X, npc.Y)
+	if idx < len(w.Cooldowns) {
+		vm.MemWrite(Ring0Cooldown, int16(w.Cooldowns[idx]))
+	} else {
+		vm.MemWrite(Ring0Cooldown, 0)
+	}
+
 	// Effective gas: base + modifier bonus with diminishing returns
 	gasBonus := 0
 	add := npc.ModSum(ModGas)
@@ -240,9 +284,25 @@ func (s *Scheduler) think(npc *NPC) {
 	vm.MemWrite(64+Ring1Target, 0)
 	vm.MemWrite(64+Ring1Emotion, 0)
 
-	// Load genome and run
+	// Load genome and run as coroutine
 	vm.Load(npc.Genome)
-	vm.Run() // ignores error (gas exhaustion is normal)
+	for {
+		vm.Run() // ignores error (gas exhaustion is normal)
+		if !vm.Yielded {
+			break // halted, error, or gas exhaustion
+		}
+		// Yield: execute Ring1 actions, refresh sensors, resume
+		s.act(npc)
+		s.sense(npc)
+		vm.MemWrite(64+Ring1Move, 0)
+		vm.MemWrite(64+Ring1Action, 0)
+		vm.MemWrite(64+Ring1Target, 0)
+		vm.MemWrite(64+Ring1Emotion, 0)
+		vm.Yielded = false
+		if vm.Gas <= 0 {
+			break
+		}
+	}
 }
 
 // act reads Ring1 outputs and applies movement/action.
@@ -265,6 +325,9 @@ func (s *Scheduler) act(npc *NPC) {
 	}
 
 	// Apply movement
+	if moveDir >= DirNorth && moveDir <= DirWest {
+		npc.LastDir = byte(moveDir)
+	}
 	nx, ny := npc.X, npc.Y
 	switch moveDir {
 	case DirNorth:
@@ -348,17 +411,26 @@ func (s *Scheduler) act(npc *NPC) {
 		targetID := uint16(vm.MemRead(64 + Ring1Target))
 		if other := w.npcByID[targetID]; other != nil && other.Alive() {
 			d := abs(other.X-npc.X) + abs(other.Y-npc.Y)
-			if d <= 1 {
-				dmg := 10 - other.ModSum(ModDefense)
+			if d <= 1 && npc.Energy >= 10 {
+				dmg := 5 + npc.ModSum(ModAttack) - other.ModSum(ModDefense)
 				if dmg < 1 {
 					dmg = 1
 				}
 				other.Health -= dmg
-				npc.Energy -= 5
-				// Stress: target gets combat stress
+				npc.Energy -= 10
+				s.AttackCount++
 				other.Stress += 15
 				if other.Stress > 100 {
 					other.Stress = 100
+				}
+				// Steal item if target dies
+				if !other.Alive() {
+					s.KillCount++
+				}
+				if !other.Alive() && other.Item != ItemNone && npc.Item == ItemNone {
+					npc.Item = other.Item
+					grantItemModifier(npc, npc.Item)
+					other.Item = ItemNone
 				}
 			}
 		}
@@ -402,6 +474,33 @@ func (s *Scheduler) act(npc *NPC) {
 				npc.Energy -= 10
 			}
 		}
+	case ActionHeal:
+		targetID := uint16(vm.MemRead(64 + Ring1Target))
+		if other := w.npcByID[targetID]; other != nil && other.Alive() {
+			d := abs(other.X-npc.X) + abs(other.Y-npc.Y)
+			if d <= 1 && npc.Energy >= 8 {
+				heal := 5 + npc.ModSum(ModForage) // tool bonus
+				other.Health += heal
+				if other.Health > 100 {
+					other.Health = 100
+				}
+				npc.Energy -= 8
+				s.HealCount++
+				// Healing relieves stress for both
+				npc.Stress -= 3
+				if npc.Stress < 0 {
+					npc.Stress = 0
+				}
+				other.Stress -= 5
+				if other.Stress < 0 {
+					other.Stress = 0
+				}
+			}
+		}
+	case ActionHarvest:
+		s.harvest(npc)
+	case ActionTerraform:
+		s.terraform(npc)
 	}
 }
 
@@ -576,6 +675,148 @@ func (s *Scheduler) tryEat(npc *NPC, x, y int) bool {
 		return true
 	}
 	return false
+}
+
+// harvest extracts a resource from the tile the NPC stands on.
+// Tile stays but goes on cooldown. Result depends on biome.
+func (s *Scheduler) harvest(npc *NPC) {
+	w := s.World
+	if npc.Energy < 5 {
+		return
+	}
+	idx := w.idx(npc.X, npc.Y)
+	if idx >= len(w.Cooldowns) || w.Cooldowns[idx] > 0 {
+		return // tile on cooldown
+	}
+
+	// Determine biome (default to clearing if biomes disabled)
+	biome := byte(BiomeClearing)
+	if w.Biomes && w.BiomeGrid != nil {
+		biome = w.BiomeGrid[idx]
+	}
+
+	npc.Energy -= 5
+	s.HarvestCount++
+	roll := w.Rng.Intn(100)
+
+	switch biome {
+	case BiomeClearing:
+		// food, 5 tick cooldown
+		npc.Energy += 30
+		if npc.Energy > 200 {
+			npc.Energy = 200
+		}
+		npc.FoodEaten++
+		w.Cooldowns[idx] = 5
+	case BiomeForest:
+		// 80% food, 20% tool
+		if roll < 80 {
+			npc.Energy += 30
+			if npc.Energy > 200 {
+				npc.Energy = 200
+			}
+			npc.FoodEaten++
+		} else if npc.Item == ItemNone {
+			npc.Item = ItemTool
+			grantItemModifier(npc, ItemTool)
+		}
+		w.Cooldowns[idx] = 15
+	case BiomeRiver:
+		// food (fish), 10 tick cooldown
+		npc.Energy += 30
+		if npc.Energy > 200 {
+			npc.Energy = 200
+		}
+		npc.FoodEaten++
+		w.Cooldowns[idx] = 10
+	case BiomeMountain:
+		// 70% weapon, 30% crystal
+		if npc.Item == ItemNone {
+			if roll < 30 {
+				npc.Item = ItemCrystal
+				npc.AddMod(Modifier{Kind: ModGas, Mag: 50, Duration: -1, Source: ItemCrystal})
+			} else {
+				npc.Item = ItemWeapon
+				grantItemModifier(npc, ItemWeapon)
+			}
+		}
+		w.Cooldowns[idx] = 40
+	case BiomeVillage:
+		// 50% tool, 50% treasure
+		if npc.Item == ItemNone {
+			if roll < 50 {
+				npc.Item = ItemTool
+				grantItemModifier(npc, ItemTool)
+			} else {
+				npc.Item = ItemTreasure
+				grantItemModifier(npc, ItemTreasure)
+			}
+		}
+		w.Cooldowns[idx] = 30
+	case BiomeSwamp:
+		// 50% food, 50% poison damage
+		if roll < 50 {
+			npc.Energy += 30
+			if npc.Energy > 200 {
+				npc.Energy = 200
+			}
+			npc.FoodEaten++
+		} else {
+			npc.Health -= 10
+			npc.Stress += 5
+			if npc.Stress > 100 {
+				npc.Stress = 100
+			}
+		}
+		w.Cooldowns[idx] = 20
+	default:
+		// Non-biome world: just give food from non-empty tiles
+		tileType := w.TileAt(npc.X, npc.Y).Type()
+		if tileType == TileFood {
+			w.SetTile(npc.X, npc.Y, MakeTile(TileEmpty))
+			npc.Energy += 30
+			if npc.Energy > 200 {
+				npc.Energy = 200
+			}
+			npc.FoodEaten++
+		}
+		w.Cooldowns[idx] = 10
+	}
+
+	// Compass halves cooldown
+	if npc.ModSum(ModForage) > 0 && w.Cooldowns[idx] > 1 {
+		w.Cooldowns[idx] /= 2
+	}
+}
+
+// terraform modifies the tile the NPC stands on.
+func (s *Scheduler) terraform(npc *NPC) {
+	w := s.World
+	cost := 30 - npc.ModSum(ModForage)*5 // tool reduces cost
+	if cost < 10 {
+		cost = 10
+	}
+	if npc.Energy < cost {
+		return
+	}
+
+	tileType := w.TileAt(npc.X, npc.Y).Type()
+	switch tileType {
+	case TileEmpty:
+		// Plant food
+		w.SetTile(npc.X, npc.Y, MakeTile(TileFood))
+		npc.Energy -= cost
+		s.TerraformCount++
+	case TileFood:
+		// Already food — no-op
+	case TileForge:
+		// Can't terraform forge
+	default:
+		// Clear any other tile to empty (forest→empty, etc.)
+		w.SetTile(npc.X, npc.Y, MakeTile(TileEmpty))
+		npc.Energy -= cost
+		s.TerraformCount++
+	}
 }
 
 // applyModifiers applies per-tick effects from active modifiers.
