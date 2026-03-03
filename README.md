@@ -2,6 +2,34 @@
 
 ## Changelog
 
+### Phase 10 — Warriors Become Healers: Emergent Phase Transitions (2026-03-03)
+
+Seed 999 produced a warrior culture at 100k ticks: 568k attacks, 7,907 kills. We doubled the run. **The warriors self-corrected.** Attacks dropped 93%, kills dropped 97%, heals exploded 15,450%, and trades went from 882 to 2 million. The most violent civilization became the most cooperative.
+
+- **Warrior self-destruction** — killing reduces trading partners, shrinks the economy. Warrior genomes score high short-term but create negative-sum environments.
+- **One-byte mutation bridge** — heal (`0x95`) is one byte from attack (`0x94`). Once healer mutants appear, they create positive-sum environments that outcompete warriors.
+- **Kin selection ratchet** — `Ring0Similarity` sensor lets genomes check genetic distance. As GA homogenizes the population, similarity triggers heal instead of attack. Self-reinforcing.
+- **City-states emerged** — 26-NPC and 15-NPC settlements at 200k ticks, with dense healing and trading networks.
+
+| Metric | 100k (warrior phase) | 200k (healer phase) | Change |
+|--------|---------------------|---------------------|--------|
+| Attacks | 568,282 | 40,225 | **-93%** |
+| Kills | 7,907 | 252 | **-97%** |
+| Heals | 1,710 | 264,192 | **+15,450%** |
+| Trades | 882 | 2,042,358 | **+231,500%** |
+
+Cooperation is an evolutionary attractor. All 4 seeds converge to high-trade, high-heal, low-attack societies — seed 999 just took the scenic route through warfare first.
+
+```bash
+# Warrior seed at peak violence (100k)
+go run ./cmd/sandbox --npcs 200 --ticks 100000 --seed 999 --biomes --wfc-genome
+
+# Same seed after transition (200k)
+go run ./cmd/sandbox --npcs 200 --ticks 200000 --seed 999 --biomes --wfc-genome
+```
+
+See [Warriors Become Healers](reports/2026-03-03-011-warrior-healer-phase-transition.md) for full timeline, cluster analysis, and cross-seed comparison.
+
 ### Phase 9 — Action Opcodes, Combat & Farming: The Complexity Explosion (2026-03-03)
 
 Genomes were stuck at 20 bytes. A simple `sense_food → move → eat → yield` loop was the global optimum — no selective pressure for complexity. The fix: 9 two-byte action opcodes (`0x93`-`0x9B`), multi-yield coroutine brains, real combat damage, biome-based harvesting, terraforming, and food depletion. **Average genome size jumped 4.5x from 24 to 109 bytes. Warrior cultures emerge on some seeds while peaceful farming civilizations emerge on others.**
