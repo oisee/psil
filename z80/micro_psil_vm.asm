@@ -260,9 +260,9 @@ do_2byte:
     CP $89 : JR Z, .call
     CP $85 : JR Z, .jmp
     CP $86 : JR Z, .jmpb
-    CP $87 : JR Z, .jz
-    CP $88 : JR Z, .jnz
-    CP $82 : JR Z, .qx
+    CP $87 : JP Z, .jz
+    CP $88 : JP Z, .jnz
+    CP $82 : JP Z, .qx
     CP $81 : JP Z, .sx
     CP $83 : JP Z, .loc
     CP $84 : JP Z, .sloc
@@ -270,6 +270,16 @@ do_2byte:
     CP $8B : JP Z, .r1r
     CP $8C : JP Z, .r1w
     CP $8E : JP Z, .gas
+    ; Action opcodes ($93-$9B): write to Ring1 slots + yield
+    CP $93 : JP Z, .act_move
+    CP $94 : JP Z, .act_attack
+    CP $95 : JP Z, .act_heal
+    CP $96 : JP Z, .act_eat
+    CP $97 : JP Z, .act_harvest
+    CP $98 : JP Z, .act_terraform
+    CP $99 : JP Z, .act_share
+    CP $9A : JP Z, .act_trade
+    CP $9B : JP Z, .act_craft
     JP vm_run
 
 .pb:    ; push.b
@@ -395,6 +405,176 @@ do_2byte:
     BIT 7, H              ; check if negative
     JP Z, vm_run
     ; Gas exhausted — halt
+    RET
+
+; --- Action opcodes: write direction/action to Ring1 VM memory, then yield ---
+; B = arg byte from bytecode
+; Ring1 layout in VM memory (slots 64-67, byte offsets 128-135):
+;   slot 64 (offset 128-129): move direction
+;   slot 65 (offset 130-131): action ID
+;   slot 66 (offset 132-133): action arg
+;   slot 67 (offset 134-135): reserved
+
+; Helper: resolve direction arg in B
+; B=1-4 direct dirs, B=5→food_dir, B=6→near_dir, B=7→item_dir
+; Returns resolved dir in B
+.resolve_dir:
+    LD A, B
+    CP 5
+    JR Z, .rd_food
+    CP 6
+    JR Z, .rd_npc
+    CP 7
+    JR Z, .rd_item
+    RET                        ; 1-4 already resolved
+.rd_food:
+    LD A, 13                   ; Ring0 slot 13 = food_dir
+    CALL mem_rd
+    LD B, E
+    RET
+.rd_npc:
+    LD A, 18                   ; Ring0 slot 18 = near_dir
+    CALL mem_rd
+    LD B, E
+    RET
+.rd_item:
+    LD A, 19                   ; Ring0 slot 19 = item_dir
+    CALL mem_rd
+    LD B, E
+    RET
+
+; act.move [dir_arg]: set move direction
+.act_move:
+    CALL .resolve_dir
+    LD A, 64                   ; slot 64 = move dir
+    LD E, B
+    LD D, 0
+    CALL mem_wr
+    ; Yield
+    LD A, 1
+    LD (vm_retf), A
+    RET
+
+; act.eat: set action=eat, move toward food
+.act_eat:
+    ; Set move dir = toward food (dir arg B, or food_dir if B=0)
+    LD A, B
+    OR A
+    JR NZ, .ae_has_dir
+    LD B, 5                    ; default: toward food
+.ae_has_dir:
+    CALL .resolve_dir
+    LD A, 64
+    LD E, B
+    LD D, 0
+    CALL mem_wr
+    ; Set action = eat (1)
+    LD A, 65
+    LD E, 1
+    LD D, 0
+    CALL mem_wr
+    LD A, 1
+    LD (vm_retf), A
+    RET
+
+; act.attack: set action=attack, move toward NPC
+.act_attack:
+    LD A, B
+    OR A
+    JR NZ, .aa_dir
+    LD B, 6                    ; default: toward NPC
+.aa_dir:
+    CALL .resolve_dir
+    LD A, 64
+    LD E, B
+    LD D, 0
+    CALL mem_wr
+    LD A, 65
+    LD E, 2                    ; ACT_ATTACK
+    LD D, 0
+    CALL mem_wr
+    LD A, 1
+    LD (vm_retf), A
+    RET
+
+; act.heal: set action=heal, move toward NPC
+.act_heal:
+    LD A, B
+    OR A
+    JR NZ, .ah_dir
+    LD B, 6
+.ah_dir:
+    CALL .resolve_dir
+    LD A, 64
+    LD E, B
+    LD D, 0
+    CALL mem_wr
+    LD A, 65
+    LD E, 7                    ; ACT_HEAL
+    LD D, 0
+    CALL mem_wr
+    LD A, 1
+    LD (vm_retf), A
+    RET
+
+; act.harvest: set action=harvest
+.act_harvest:
+    LD A, 65
+    LD E, 8                    ; ACT_HARVEST
+    LD D, 0
+    CALL mem_wr
+    LD A, 1
+    LD (vm_retf), A
+    RET
+
+; act.terraform: set action=terraform
+.act_terraform:
+    LD A, 65
+    LD E, 9                    ; ACT_TERRAFORM
+    LD D, 0
+    CALL mem_wr
+    LD A, 1
+    LD (vm_retf), A
+    RET
+
+; act.share: set action=share, move toward NPC
+.act_share:
+    LD A, B
+    OR A
+    JR NZ, .as_dir
+    LD B, 6
+.as_dir:
+    CALL .resolve_dir
+    LD A, 64
+    LD E, B
+    LD D, 0
+    CALL mem_wr
+    LD A, 65
+    LD E, 3                    ; ACT_SHARE
+    LD D, 0
+    CALL mem_wr
+    LD A, 1
+    LD (vm_retf), A
+    RET
+
+; act.trade: set action=trade
+.act_trade:
+    LD A, 65
+    LD E, 4                    ; ACT_TRADE
+    LD D, 0
+    CALL mem_wr
+    LD A, 1
+    LD (vm_retf), A
+    RET
+
+; act.craft: set action=craft
+.act_craft:
+    LD A, 65
+    LD E, 5                    ; ACT_CRAFT
+    LD D, 0
+    CALL mem_wr
+    LD A, 1
+    LD (vm_retf), A
     RET
 
 ; ============================================================================

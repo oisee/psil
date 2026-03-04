@@ -336,7 +336,7 @@ func (vm *VM) Step() error {
 		return nil
 	}
 
-	if vm.PC >= len(vm.Code) {
+	if vm.PC < 0 || vm.PC >= len(vm.Code) {
 		vm.Halted = true
 		return nil
 	}
