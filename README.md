@@ -2,6 +2,38 @@
 
 ## Changelog
 
+### Phase 12 — Replay Observatory, Genome Injection & 200k-Tick Analysis (2026-03-04)
+
+Simulations are no longer fire-and-forget. We now **record** full state to JSONL and **replay** it in a colored terminal UI with biome backgrounds, NPC markers, pause/step/speed controls, and a side-panel legend. We also added **genome injection** — load a hex genome file and spawn copies into a running simulation at any tick.
+
+- **Simulation recording** (`--record file.jsonl --record-every N`) — captures world grid, all NPC state, and cumulative stats every N ticks. The `warrior999.jsonl` recording: 2,000 frames across 200k ticks in 614 KB.
+- **Replay player** (`tools/replay/`) — colored terminal playback with biome backgrounds, NPC symbols (color-coded by item/HP), pause/step/speed controls. New side-panel legend shows all biome swatches, tile types, NPC markers, and keyboard shortcuts.
+- **Genome injection** (`--inject file.hex --inject-count N --inject-at T`) — inject hand-crafted or previously-evolved genomes into running simulations. Enables invasion scenarios, cross-seed genome transfer, and archetype stress tests.
+- **200k-tick observatory** (seed 999) — analyzed the full warrior999 recording:
+  - 50% population culling in the first 10k ticks, then rock-solid stability at ~96-100
+  - **Compass monoculture**: 75% of item holders converge on compasses; weapons go nearly extinct
+  - **147 million terraforms** — every tile rewritten ~47,000 times
+  - Only **6 kills** despite 5,976 attacks — healing outpaces damage 482:1
+  - Trading dies by tick 10k but teaching persists for 200k ticks
+  - Genome bloat: 93% of genomes hit the 128-byte cap
+  - An unexplained "Late War" burst of 2,000 attacks around tick 165k that kills nobody
+
+```bash
+# Record a simulation
+go run ./cmd/sandbox --npcs 200 --ticks 200000 --seed 999 --biomes --wfc-genome \
+    --record warrior999.jsonl --record-every 100
+
+# Replay it
+go run ./tools/replay warrior999.jsonl
+
+# Inject a genome mid-run
+echo "8a0d8c002181018c01f1" > forager.hex
+go run ./cmd/sandbox --npcs 200 --ticks 100000 --biomes \
+    --inject forager.hex --inject-count 20 --inject-at 50000
+```
+
+See [Replay Observatory](reports/2026-03-04-013-replay-and-200k-tick-observatory.md) for full analysis with action rates, fitness distributions, and spatial clustering.
+
 ### Phase 11 — Evolved Brains Decoded: What 100k Ticks of Evolution Produce (2026-03-03)
 
 We disassembled the winning genomes from 6 simulation runs. Handcrafted archetypes are 17-27 bytes with 1-2 actions per tick. After 100k ticks of evolution, winning genomes are 42-128 bytes with 5-8 actions per tick and ~40% junk DNA. **Evolution produces working programs — not elegant ones, but programs that harvest, terraform, trade, and fight.**

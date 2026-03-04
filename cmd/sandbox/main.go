@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"encoding/csv"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io"
@@ -205,6 +207,11 @@ type simConfig struct {
 	biomes                                   bool
 	wfcGenome                                bool
 	maxGenome                                int
+	record                                   string
+	recordEvery                              int
+	inject                                   string
+	injectCount                              int
+	injectAt                                 int
 }
 
 type simResult struct {
@@ -598,8 +605,78 @@ func runFullSimulation(cfg simConfig, csvOut bool) {
 	}
 	var timeline []timePoint
 
+	// Set up recorder if requested
+	var rec *sandbox.Recorder
+	if cfg.record != "" {
+		var err error
+		rec, err = sandbox.NewRecorder(cfg.record, cfg.recordEvery)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "record: %v\n", err)
+			os.Exit(1)
+		}
+		defer rec.Close()
+		var biomeGrid []byte
+		if w.Biomes && w.BiomeGrid != nil {
+			biomeGrid = w.BiomeGrid
+		}
+		rec.WriteHeader(sandbox.RecordHeader{
+			Seed:      cfg.seed,
+			NPCs:      cfg.npcs,
+			WorldSize: ws,
+			Ticks:     cfg.ticks,
+			EveryN:    cfg.recordEvery,
+			Biomes:    cfg.biomes,
+			BiomeGrid: biomeGrid,
+		})
+	}
+
+	// Load injected genome if requested
+	var injectedGenome []byte
+	if cfg.inject != "" {
+		gf, err := os.Open(cfg.inject)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "inject: %v\n", err)
+			os.Exit(1)
+		}
+		sc := bufio.NewScanner(gf)
+		for sc.Scan() {
+			line := strings.TrimSpace(sc.Text())
+			if line != "" {
+				injectedGenome, err = hex.DecodeString(line)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "inject: bad hex: %v\n", err)
+					os.Exit(1)
+				}
+				break
+			}
+		}
+		gf.Close()
+		if len(injectedGenome) == 0 {
+			fmt.Fprintf(os.Stderr, "inject: no genome found in %s\n", cfg.inject)
+			os.Exit(1)
+		}
+	}
+
 	for tick := 0; tick < cfg.ticks; tick++ {
 		sched.Tick()
+
+		if rec != nil {
+			rec.RecordTick(tick, w, sched)
+		}
+
+		// Inject custom genome at specified tick
+		if injectedGenome != nil && tick == cfg.injectAt {
+			for i := 0; i < cfg.injectCount; i++ {
+				g := make([]byte, len(injectedGenome))
+				copy(g, injectedGenome)
+				npc := sandbox.NewNPC(g)
+				npc.X = rng.Intn(ws)
+				npc.Y = rng.Intn(ws)
+				w.Spawn(npc)
+			}
+			fmt.Fprintf(os.Stderr, "Injected %d NPCs with genome from %s at tick %d\n",
+				cfg.injectCount, cfg.inject, tick)
+		}
 
 		if tick%tlEvery == 0 {
 			timeline = append(timeline, sampleStats(w, sched, tick))
@@ -729,6 +806,11 @@ func main() {
 	biomes := flag.Bool("biomes", false, "enable WFC biome generation")
 	wfcGenome := flag.Bool("wfc-genome", false, "use WFC to generate structurally valid genomes")
 	maxGenome := flag.Int("max-genome", 128, "maximum genome size in bytes (default 128)")
+	record := flag.String("record", "", "record simulation to JSONL file")
+	recordEvery := flag.Int("record-every", 100, "record a frame every N ticks")
+	inject := flag.String("inject", "", "hex genome file to inject (first line = hex bytes)")
+	injectCount := flag.Int("inject-count", 1, "number of copies to spawn from injected genome")
+	injectAt := flag.Int("inject-at", 0, "tick at which to inject genome")
 	ab := flag.Bool("ab", false, "run both growth and classic modes, print comparison")
 	flag.Parse()
 
@@ -764,6 +846,11 @@ func main() {
 		biomes:        *biomes,
 		wfcGenome:     *wfcGenome,
 		maxGenome:     *maxGenome,
+		record:        *record,
+		recordEvery:   *recordEvery,
+		inject:        *inject,
+		injectCount:   *injectCount,
+		injectAt:      *injectAt,
 	}
 
 	if *ab {
