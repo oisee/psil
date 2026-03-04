@@ -2,6 +2,42 @@
 
 ## Changelog
 
+### Phase 14 — Z80 Sandbox: Evolutionary NPCs on a ZX Spectrum (2026-03-04)
+
+The Go sandbox's evolutionary mechanics now run on a **real Z80 CPU** (ZX Spectrum 128K). 16 NPCs with bytecode genomes live in a 32x24 tile world, sense their 5x5 neighborhood, execute decisions through the micro-PSIL VM, and evolve through tournament selection with crossover and mutation. **The entire system fits in 4,665 bytes of Z80 machine code.**
+
+- **5x5 sensor scan** — each NPC scans 25 cells per tick to find nearest food, NPC, and item with Manhattan distance and cardinal direction. 31 Ring0 sensor slots, matching the Go sandbox's layout.
+- **9-action dispatch** via jump table — eat, attack, heal, harvest, terraform, share, trade, craft, teach. All implemented in Z80 assembly with energy costs, adjacency checks, and item effects.
+- **Tournament-3 GA** with single-point crossover (LDIR) and 3 mutation types (point/insert/delete). Dead NPCs are respawned with mutated offspring. Clone-if-1-alive fallback prevents extinction.
+- **128K bank switching** — genomes in Bank 0 ($C000), code+stack in Bank 2 ($8000-$BFFE), world state in Bank 5 ($5B00-$6FFF). Stack relocated from $FF00 (switchable bank — broken!) to $BFFE (always mapped).
+- **9 VM action opcodes** ($93-$9B) with smart direction resolution: `5=toward_food`, `6=toward_NPC`, `7=toward_item`. A 7-byte genome can be a competent forager.
+- **Performance**: 6.7M Z80 instructions for 256 ticks. 18.8s wall time at 3.5MHz. Sensor scan is the hotspot at 43.8% — 25 cells x 2 grid lookups x 16 NPCs x 256 ticks. The GA is essentially free at 0.2%.
+
+| Feature | Go sandbox | Z80 sandbox | Notes |
+|---------|-----------|-------------|-------|
+| World | 64x64 | 32x24 | Fits Spectrum screen |
+| NPCs | 128 | 16 | Tick budget limited |
+| GA | Tournament-3, crossover, 3 mutations | Same | Feature-complete |
+| Actions | 9 + move | 9 + move | Feature-complete |
+| Sensors | 31 slots, full scan | 31 slots, 5x5 local | Nearsighted |
+| Speed | ~50k ticks/sec | ~13.6 ticks/sec | 3,600x slower |
+| Binary | ~2MB (Go) | 4,665 bytes | 400x smaller |
+
+```sh
+# Build and run
+sjasmplus z80/sandbox.asm --raw=z80/build/sandbox.bin
+mzx --run z80/build/sandbox.bin@8000 --console-io --frames DI:HALT --max-frames 2000000
+
+# Sample output
+NPC Sandbox Z80 v2
+T=16  A=16 F=146 E=9     # 16 alive, fitness 146, 9 eats
+T=48  A=2  F=158 E=6     # die-off, GA respawning
+T=128 A=7  F=258 E=1     # population recovering
+T=224 A=10 F=394 E=1     # stable at ~10 NPCs, fitness growing
+```
+
+See [Z80 Sandbox Phase 1 Report](reports/2026-03-04-z80-sandbox-phase1.md) for full architecture, memory maps, profiling breakdown, and compromise analysis.
+
 ### Phase 13 — Dynamic Brain Growth & Gas Scaling (2026-03-04)
 
 Genomes hit the 128-byte cap by tick ~50k and stagnated. We added **dynamic brain growth** — the genome cap and gas limit automatically increase over deep time, giving evolution room to explore longer, more complex programs. Both parameters are flag-configurable and on by default.
