@@ -2,6 +2,35 @@
 
 ## Changelog
 
+### Phase 13 — Dynamic Brain Growth & Gas Scaling (2026-03-04)
+
+Genomes hit the 128-byte cap by tick ~50k and stagnated. We added **dynamic brain growth** — the genome cap and gas limit automatically increase over deep time, giving evolution room to explore longer, more complex programs. Both parameters are flag-configurable and on by default.
+
+- **Genome cap growth** (`--genome-grow 64 --genome-grow-every 50000`) — max genome size increases by 64 bytes every 50k ticks. At 200k ticks: 128 → 320. Evolution immediately fills the new space with duplicated farming loops.
+- **Gas scaling** (`--gas-grow 10 --gas-grow-every 70000`) — gas limit increases by 10 every 70k ticks. More gas = more yields per tick. 4-yield brains emerge after the second gas increase.
+- **Gene duplication discovered** — with room to grow, evolution copies working 50-byte farming modules and specializes the duplicates. One copy stays on food; the other explores items. Textbook gene duplication, emergent in bytecode.
+- **Seed 999 comparison** (50 NPCs, 200k ticks):
+  - **+71% best fitness** (832k vs 487k) — larger brains harvest 10x more efficiently
+  - **+151% avg fitness** — the entire population benefits, not just the champion
+  - **+968% harvests** (627k vs 58k) — extra gas enables 4 harvest cycles per tick vs 2
+  - **-77% stress** (8 vs 35) — longer brains always find food before energy runs out
+  - **genomeAvg 312 vs 110** — evolution uses 3x the space when given it
+- **Backward compatible** — pass `--genome-grow 0 --gas-grow 0` to reproduce exact pre-growth behavior. Same seed + same flags = deterministic output.
+
+```bash
+# Default (growth enabled)
+go run ./cmd/sandbox --npcs 50 --ticks 200000 --seed 999 --biomes
+
+# Disable growth (old behavior)
+go run ./cmd/sandbox --npcs 50 --ticks 200000 --seed 999 --biomes --genome-grow 0 --gas-grow 0
+
+# Custom schedule: big jumps, less often
+go run ./cmd/sandbox --npcs 50 --ticks 500000 --seed 999 --biomes \
+    --genome-grow 128 --genome-grow-every 100000 --gas-grow 20 --gas-grow-every 50000
+```
+
+See [Dynamic Brain Growth](reports/2026-03-04-014-dynamic-brain-growth.md) for full comparison, disassembled mega-brains, gene duplication analysis, and growth trajectories.
+
 ### Phase 12 — Replay Observatory, Genome Injection & 200k-Tick Analysis (2026-03-04)
 
 Simulations are no longer fire-and-forget. We now **record** full state to JSONL and **replay** it in a colored terminal UI with biome backgrounds, NPC markers, pause/step/speed controls, and a side-panel legend. We also added **genome injection** — load a hex genome file and spawn copies into a running simulation at any tick.

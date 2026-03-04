@@ -212,6 +212,10 @@ type simConfig struct {
 	inject                                   string
 	injectCount                              int
 	injectAt                                 int
+	genomeGrowDelta                          int
+	genomeGrowEvery                          int
+	gasGrowDelta                             int
+	gasGrowEvery                             int
 }
 
 type simResult struct {
@@ -329,6 +333,18 @@ func runSimulation(cfg simConfig) simResult {
 
 	for tick := 0; tick < cfg.ticks; tick++ {
 		sched.Tick()
+
+		// Dynamic brain growth
+		if cfg.genomeGrowDelta > 0 && cfg.genomeGrowEvery > 0 && tick > 0 && tick%cfg.genomeGrowEvery == 0 {
+			ga.MaxGenomeSize += cfg.genomeGrowDelta
+			fmt.Fprintf(os.Stderr, "Tick %d: max genome size → %d\n", tick, ga.MaxGenomeSize)
+		}
+
+		// Dynamic gas scaling
+		if cfg.gasGrowDelta > 0 && cfg.gasGrowEvery > 0 && tick > 0 && tick%cfg.gasGrowEvery == 0 {
+			sched.Gas += cfg.gasGrowDelta
+			fmt.Fprintf(os.Stderr, "Tick %d: base gas → %d\n", tick, sched.Gas)
+		}
 
 		if tick%tlEvery == 0 {
 			timeline = append(timeline, sampleStats(w, sched, tick))
@@ -678,6 +694,18 @@ func runFullSimulation(cfg simConfig, csvOut bool) {
 				cfg.injectCount, cfg.inject, tick)
 		}
 
+		// Dynamic brain growth
+		if cfg.genomeGrowDelta > 0 && cfg.genomeGrowEvery > 0 && tick > 0 && tick%cfg.genomeGrowEvery == 0 {
+			ga.MaxGenomeSize += cfg.genomeGrowDelta
+			fmt.Fprintf(os.Stderr, "Tick %d: max genome size → %d\n", tick, ga.MaxGenomeSize)
+		}
+
+		// Dynamic gas scaling
+		if cfg.gasGrowDelta > 0 && cfg.gasGrowEvery > 0 && tick > 0 && tick%cfg.gasGrowEvery == 0 {
+			sched.Gas += cfg.gasGrowDelta
+			fmt.Fprintf(os.Stderr, "Tick %d: base gas → %d\n", tick, sched.Gas)
+		}
+
 		if tick%tlEvery == 0 {
 			timeline = append(timeline, sampleStats(w, sched, tick))
 		}
@@ -811,6 +839,10 @@ func main() {
 	inject := flag.String("inject", "", "hex genome file to inject (first line = hex bytes)")
 	injectCount := flag.Int("inject-count", 1, "number of copies to spawn from injected genome")
 	injectAt := flag.Int("inject-at", 0, "tick at which to inject genome")
+	genomeGrowDelta := flag.Int("genome-grow", 64, "increase max genome size by this amount each period (0=off)")
+	genomeGrowEvery := flag.Int("genome-grow-every", 50000, "ticks between genome size increases")
+	gasGrowDelta := flag.Int("gas-grow", 10, "increase gas by this amount each period (0=off)")
+	gasGrowEvery := flag.Int("gas-grow-every", 70000, "ticks between gas increases")
 	ab := flag.Bool("ab", false, "run both growth and classic modes, print comparison")
 	flag.Parse()
 
@@ -848,9 +880,13 @@ func main() {
 		maxGenome:     *maxGenome,
 		record:        *record,
 		recordEvery:   *recordEvery,
-		inject:        *inject,
-		injectCount:   *injectCount,
-		injectAt:      *injectAt,
+		inject:          *inject,
+		injectCount:     *injectCount,
+		injectAt:        *injectAt,
+		genomeGrowDelta: *genomeGrowDelta,
+		genomeGrowEvery: *genomeGrowEvery,
+		gasGrowDelta:    *gasGrowDelta,
+		gasGrowEvery:    *gasGrowEvery,
 	}
 
 	if *ab {
