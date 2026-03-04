@@ -139,6 +139,9 @@ sandbox_entry:
     LD (HL), 0
     LDIR
 
+    ; Generate biome grid via WFC
+    CALL generate_biomes
+
     ; Initialize NPCs with random genomes
     CALL init_npcs
 
@@ -530,8 +533,14 @@ run_brain:
     LD BC, 7
     LDIR
 
-    ; Set gas
+    ; Set gas (crystal item: +50 bonus)
     LD HL, GAS_LIMIT
+    LD A, (IX+14)
+    CP 5                       ; crystal?
+    JR NZ, .gas_no_crystal
+    LD DE, 50
+    ADD HL, DE
+.gas_no_crystal:
     LD (vm_gas), HL
 
     ; Load genome pointer
@@ -716,14 +725,14 @@ act_eat:
     CALL try_eat
     JP act_done
 
-; --- act_attack: deal 5 damage to nearest adjacent NPC ---
+; --- act_attack: deal 5 damage to nearest adjacent NPC (weapon: +5) ---
 act_attack:
     LD A, (IX+4)               ; energy check
     CP 10
     JP C, act_done
     ; Find adjacent NPC using near_dir
     LD A, (RING0_BUF + 14)    ; near_dist
-    CP 2                       ; must be adjacent (dist <= 1... but scan excludes self)
+    CP 2                       ; must be adjacent (dist <= 1)
     JP NC, act_done
     ; Get target NPC index from occupancy
     LD A, (RING0_BUF + 24)    ; near_id (slot 12)
@@ -731,14 +740,36 @@ act_attack:
     JP Z, act_done
     ; Find target in NPC table
     CALL find_npc_by_id        ; IY = target NPC
-    JP Z, act_done  ; not found
+    JP Z, act_done             ; not found
+    ; Compute damage: 5 base + 5 if weapon
+    LD B, 5                    ; base damage
+    LD A, (IX+14)
+    CP 3                       ; weapon?
+    JR NZ, .atk_no_wpn
+    LD B, 10                   ; 5 + 5 weapon bonus
+.atk_no_wpn:
+    ; Check target shield: reduce damage by 5
+    LD A, (IY+14)
+    CP 6                       ; shield?
+    JR NZ, .atk_no_shld
+    LD A, B
+    SUB 5
+    JR NC, .atk_shld_ok
+    XOR A
+.atk_shld_ok:
+    LD B, A
+.atk_no_shld:
     ; Deal damage
     LD A, (IY+3)               ; target health
-    SUB 5
+    SUB B
     JR NC, .atk_hp_ok
     XOR A
 .atk_hp_ok:
     LD (IY+3), A
+    ; Track stat
+    LD HL, (stat_attack)
+    INC HL
+    LD (stat_attack), HL
     ; Cost energy
     LD A, (IX+4)
     SUB 10
@@ -793,24 +824,91 @@ act_heal:
     LD (IX+4), A
     JP act_done
 
-; --- act_harvest: gain energy from current tile ---
+; --- act_harvest: gain energy, biome-aware + item bonus ---
+; Clearing: +30, Forest: +20, Mountain: +10, Swamp: +15 (50% chance -10HP),
+; Village: +25, River: +30
 act_harvest:
     LD A, (IX+4)
     CP 5
     JP C, act_done
-    ; Grant +20 energy (simple version; biome-aware in Phase 3)
-    LD A, (IX+4)
+    ; Look up biome at NPC position
+    PUSH IX
+    LD B, (IX+1)
+    LD C, (IX+2)
+    ; Read biome grid
+    LD H, 0
+    LD L, C
+    ADD HL, HL : ADD HL, HL : ADD HL, HL : ADD HL, HL : ADD HL, HL
+    LD D, 0
+    LD E, B
+    ADD HL, DE
+    LD DE, BIOME_GRID
+    ADD HL, DE
+    LD A, (HL)
+    POP IX
+    ; Biome → base energy via table
+    LD HL, harvest_energy_table
+    LD E, A
+    LD D, 0
+    ADD HL, DE
+    LD B, (HL)                 ; B = base harvest energy
+    ; Swamp poison check (biome 3): 50% chance -10 HP
+    LD A, E                    ; biome index
+    CP 3                       ; swamp?
+    JR NZ, .harv_no_swamp
+    PUSH BC
+    CALL lfsr_next
+    POP BC
+    BIT 0, A                  ; 50% chance
+    JR Z, .harv_no_swamp
+    LD A, (IX+3)
+    SUB 10
+    JR NC, .harv_swamp_ok
+    XOR A
+.harv_swamp_ok:
+    LD (IX+3), A
+.harv_no_swamp:
+    ; Item bonus: tool(2)→+10, compass(7)→+20
+    LD A, (IX+14)
+    CP 2
+    JR NZ, .harv_not_tool
+    LD A, B
+    ADD A, 10
+    LD B, A
+    JR .harv_apply
+.harv_not_tool:
+    CP 7
+    JR NZ, .harv_apply
+    LD A, B
     ADD A, 20
+    LD B, A
+.harv_apply:
+    LD A, (IX+4)
+    ADD A, B
     CP 200
     JR C, .harv_cap
     LD A, 200
 .harv_cap:
     LD (IX+4), A
-    ; Cost: 5 energy net (+20-5=+15 net gain)
+    ; Cost 5 energy
     LD A, (IX+4)
     SUB 5
     LD (IX+4), A
+    ; Track stat
+    LD HL, (stat_harvest)
+    INC HL
+    LD (stat_harvest), HL
     JP act_done
+
+; Biome harvest energy: indexed by biome type 0-6
+harvest_energy_table:
+    DB 30                      ; 0 Clearing: +30
+    DB 20                      ; 1 Forest: +20
+    DB 10                      ; 2 Mountain: +10
+    DB 15                      ; 3 Swamp: +15 (+ poison risk)
+    DB 25                      ; 4 Village: +25
+    DB 30                      ; 5 River: +30
+    DB 15                      ; 6 Bridge: +15
 
 ; --- act_terraform: place food on empty tile, cost 30 energy ---
 act_terraform:
@@ -908,9 +1006,9 @@ act_teach:
     CALL lfsr_next
     LD B, A
     LD A, (IX+11)              ; our genome len
+    CP 5
+    JP C, act_done             ; need len >= 5 to teach (avoid mod-0)
     SUB 4
-    JP C, act_done
-    ; B mod (len-4)
     LD C, A
 .teach_mod:
     LD A, B
@@ -1118,7 +1216,7 @@ set_npc_occ:
 ; Food respawn + Trade resolution
 ; ============================================================================
 respawn_food:
-    ; Try to spawn one food item at random location
+    ; Try to spawn one food item, biome-weighted
     CALL lfsr_next
     AND WORLD_SIZE_X - 1       ; 0-31
     LD B, A
@@ -1128,12 +1226,44 @@ respawn_food:
     CALL get_tile
     OR A                       ; empty?
     RET NZ
-    ; Check occupancy too
     CALL occ_at
     OR A
     RET NZ
+    ; Check biome food rate: LFSR roll vs threshold
+    PUSH BC
+    ; Read biome at (B,C)
+    LD H, 0
+    LD L, C
+    ADD HL, HL : ADD HL, HL : ADD HL, HL : ADD HL, HL : ADD HL, HL
+    LD D, 0
+    LD E, B
+    ADD HL, DE
+    LD DE, BIOME_GRID
+    ADD HL, DE
+    LD A, (HL)                 ; biome type
+    LD HL, food_rate_table
+    LD E, A
+    LD D, 0
+    ADD HL, DE
+    LD B, (HL)                 ; B = threshold (0-255)
+    PUSH BC
+    CALL lfsr_next             ; A = random 0-255
+    POP BC
+    CP B                       ; spawn if A < threshold
+    POP BC
+    RET NC                     ; A >= threshold → no food
     LD A, TILE_FOOD
     JP set_tile
+
+; Food spawn rate by biome (probability out of 255)
+food_rate_table:
+    DB 153                     ; 0 Clearing: 60%
+    DB 77                      ; 1 Forest: 30%
+    DB 25                      ; 2 Mountain: 10%
+    DB 51                      ; 3 Swamp: 20%
+    DB 38                      ; 4 Village: 15%
+    DB 128                     ; 5 River: 50%
+    DB 51                      ; 6 Bridge: 20%
 
 ; resolve_trades: Check bilateral trade matches, swap items
 resolve_trades:
@@ -1356,6 +1486,11 @@ seed_food:
     INCLUDE "ga.asm"
 
 ; ============================================================================
+; WFC Biome Generation
+; ============================================================================
+    INCLUDE "wfc_biome.asm"
+
+; ============================================================================
 ; Print stats
 ; ============================================================================
 print_stats:
@@ -1424,6 +1559,26 @@ print_stats:
     OUT ($23), A
     LD DE, (stat_eat)
     CALL pr_s16
+    LD A, ' '
+    OUT ($23), A
+
+    ; Print attack count
+    LD A, 'K'
+    OUT ($23), A
+    LD A, '='
+    OUT ($23), A
+    LD DE, (stat_attack)
+    CALL pr_s16
+    LD A, ' '
+    OUT ($23), A
+
+    ; Print harvest count
+    LD A, 'H'
+    OUT ($23), A
+    LD A, '='
+    OUT ($23), A
+    LD DE, (stat_harvest)
+    CALL pr_s16
 
     LD A, 10
     OUT ($23), A
@@ -1431,6 +1586,8 @@ print_stats:
     ; Reset stats
     LD HL, 0
     LD (stat_eat), HL
+    LD (stat_attack), HL
+    LD (stat_harvest), HL
     RET
 
 ; ============================================================================
@@ -1447,10 +1604,12 @@ print_str:
 ; ============================================================================
 ; Data
 ; ============================================================================
-tick_count: DW 0
-stat_eat:   DW 0
+tick_count:   DW 0
+stat_eat:     DW 0
+stat_attack:  DW 0
+stat_harvest: DW 0
 
-str_start: DB "NPC Sandbox Z80 v2", 10, 0
+str_start: DB "NPC Sandbox Z80 v3", 10, 0
 str_done:  DB "Done", 10, 0
 
 sandbox_end:
