@@ -31,7 +31,8 @@ type GA struct {
 	MaxGenomeSize    int           // 0 = use DefaultMaxGenome (128)
 	WFCEnabled       bool
 	Archetypes       [][]byte                // handcrafted seed genomes
-	MinedConstraints [NumTokenTypes]uint16   // latest mined constraints
+	MinedConstraints [NumTokenTypes]uint16   // latest mined constraints (10-type)
+	MinedConstraints8 [8]byte                // latest mined constraints (8-type)
 }
 
 // maxGenome returns the effective max genome size.
@@ -458,6 +459,7 @@ func (ga *GA) RandomGenome(size int) []byte {
 // UpdateConstraints mines bigram constraints from the top genomes.
 func (ga *GA) UpdateConstraints(topGenomes [][]byte) {
 	ga.MinedConstraints = MineConstraints(topGenomes)
+	ga.MinedConstraints8 = MineConstraints8(topGenomes)
 }
 
 // WFCGenome generates a structurally valid genome using 1D WFC.
@@ -498,6 +500,43 @@ func (ga *GA) WFCGenome(size int) []byte {
 
 	tokens := wfc.ToTokens()
 	genome := RenderTokens(tokens, ga.Rng)
+	return ga.enforceBounds(genome)
+}
+
+// WFC8Genome generates a structurally valid genome using 8-type 1D WFC.
+func (ga *GA) WFC8Genome(size int) []byte {
+	base := BaseConstraints8()
+	merged := MergeConstraints8(ga.MinedConstraints8, base)
+
+	hasConstraints := false
+	for _, c := range merged {
+		if c != 0 {
+			hasConstraints = true
+			break
+		}
+	}
+	if !hasConstraints {
+		return ga.RandomGenome(size)
+	}
+
+	numTokens := size / 2
+	if numTokens < 4 {
+		numTokens = 4
+	}
+
+	wfc := NewWFC1D8(numTokens, merged, ga.Rng)
+	if !wfc.Collapse8(0, Tok8Sense) {
+		return ga.RandomGenome(size)
+	}
+	if !wfc.Collapse8(numTokens-1, Tok8Yield) {
+		return ga.RandomGenome(size)
+	}
+	if !wfc.Generate8() {
+		return ga.RandomGenome(size)
+	}
+
+	tokens := wfc.ToTokens8()
+	genome := RenderTokens8(tokens, ga.Rng)
 	return ga.enforceBounds(genome)
 }
 

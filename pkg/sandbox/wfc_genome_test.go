@@ -281,6 +281,246 @@ func TestBranchOffsets(t *testing.T) {
 	}
 }
 
+// --- 8-Type WFC Tests ---
+
+func TestClassifyOpcode8(t *testing.T) {
+	tests := []struct {
+		name string
+		code []byte
+		want TokenType8
+	}{
+		{"sense", []byte{micro.OpRing0R, 0x0D}, Tok8Sense},
+		{"push", []byte{0x25}, Tok8Push},
+		{"cmp eq", []byte{micro.OpEq}, Tok8Cmp},
+		{"branch jnz", []byte{micro.OpJumpNZ, 0x08}, Tok8Branch},
+		{"move r1w0", []byte{micro.OpRing1W, 0x00}, Tok8Move},
+		{"action r1w1", []byte{micro.OpRing1W, 0x01}, Tok8Action},
+		{"target r1w2", []byte{micro.OpRing1W, 0x02}, Tok8Action}, // target merged into action
+		{"stack dup", []byte{micro.OpDup}, Tok8Ops},                // stack merged into ops
+		{"math add", []byte{micro.OpAdd}, Tok8Ops},                 // math merged into ops
+		{"yield", []byte{micro.OpYield}, Tok8Yield},
+		{"halt", []byte{micro.OpHalt}, Tok8Yield},
+		{"act.eat", []byte{micro.OpActEat, 0x00}, Tok8Action},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ClassifyOpcode8(tt.code[0], tt.code, 0)
+			if got != tt.want {
+				t.Errorf("ClassifyOpcode8(%02x) = %d, want %d", tt.code[0], got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTokenizeGenome8(t *testing.T) {
+	tokens := TokenizeGenome8(testTraderGenome)
+	if len(tokens) == 0 {
+		t.Fatal("empty")
+	}
+	if tokens[0] != Tok8Sense {
+		t.Errorf("first = %d, want Tok8Sense", tokens[0])
+	}
+	// Should have no TokTarget or TokStack/TokMath — they're merged
+	for _, tok := range tokens {
+		if tok >= Num8Types {
+			t.Errorf("token %d exceeds Num8Types", tok)
+		}
+	}
+}
+
+func TestMineConstraints8(t *testing.T) {
+	constraints := MineConstraints8(testArchetypes)
+	// Sense → Push should be present
+	if constraints[Tok8Sense]&(1<<uint(Tok8Push)) == 0 {
+		t.Error("expected Sense→Push")
+	}
+	// Push → Cmp should be present
+	if constraints[Tok8Push]&(1<<uint(Tok8Cmp)) == 0 {
+		t.Error("expected Push→Cmp")
+	}
+}
+
+func TestBaseConstraints8(t *testing.T) {
+	base := BaseConstraints8()
+	// Sense should allow Push and Cmp
+	if base[Tok8Sense]&(1<<uint(Tok8Push)) == 0 {
+		t.Error("base: Sense should allow Push")
+	}
+	if base[Tok8Sense]&(1<<uint(Tok8Cmp)) == 0 {
+		t.Error("base: Sense should allow Cmp")
+	}
+	// Yield should allow Sense
+	if base[Tok8Yield]&(1<<uint(Tok8Sense)) == 0 {
+		t.Error("base: Yield should allow Sense")
+	}
+}
+
+func TestWFC8Generate(t *testing.T) {
+	base := BaseConstraints8()
+	mined := MineConstraints8(testArchetypes)
+	merged := MergeConstraints8(mined, base)
+
+	// Try multiple seeds — some may hit contradictions (expected)
+	successes := 0
+	for seed := int64(0); seed < 50; seed++ {
+		rng := rand.New(rand.NewSource(seed))
+		wfc := NewWFC1D8(10, merged, rng)
+		wfc.Collapse8(0, Tok8Sense)
+		wfc.Collapse8(9, Tok8Yield)
+
+		if !wfc.Generate8() {
+			continue
+		}
+		successes++
+
+		tokens := wfc.ToTokens8()
+		if len(tokens) != 10 {
+			t.Fatalf("seed %d: expected 10 tokens, got %d", seed, len(tokens))
+		}
+		if tokens[0] != Tok8Sense {
+			t.Errorf("seed %d: first = %d, want Tok8Sense", seed, tokens[0])
+		}
+		if tokens[9] != Tok8Yield {
+			t.Errorf("seed %d: last = %d, want Tok8Yield", seed, tokens[9])
+		}
+		for i, tok := range tokens {
+			if tok >= Num8Types {
+				t.Errorf("seed %d: token[%d] = %d exceeds Num8Types", seed, i, tok)
+			}
+		}
+	}
+	if successes == 0 {
+		t.Fatal("WFC1D8.Generate8() failed for all 50 seeds")
+	}
+	t.Logf("WFC8 succeeded %d/50 seeds", successes)
+}
+
+func TestRenderTokens8(t *testing.T) {
+	rng := rand.New(rand.NewSource(42))
+	tokens := []TokenType8{Tok8Sense, Tok8Push, Tok8Cmp, Tok8Branch, Tok8Move, Tok8Action, Tok8Yield}
+	bytecode := RenderTokens8(tokens, rng)
+	if len(bytecode) == 0 {
+		t.Fatal("empty bytecode")
+	}
+	if bytecode[0] != micro.OpRing0R {
+		t.Errorf("first byte = %02x, want OpRing0R", bytecode[0])
+	}
+	if bytecode[len(bytecode)-1] != micro.OpYield {
+		t.Errorf("last byte = %02x, want OpYield", bytecode[len(bytecode)-1])
+	}
+}
+
+func TestWFC8MinedConstraints(t *testing.T) {
+	rng := rand.New(rand.NewSource(42))
+	mined := MineConstraints8(testArchetypes)
+	base := BaseConstraints8()
+	merged := MergeConstraints8(mined, base)
+
+	// Generate 100 genomes, verify they tokenize to valid sequences
+	for i := 0; i < 100; i++ {
+		numTokens := 6 + rng.Intn(8)
+		wfc := NewWFC1D8(numTokens, merged, rng)
+		wfc.Collapse8(0, Tok8Sense)
+		wfc.Collapse8(numTokens-1, Tok8Yield)
+		if !wfc.Generate8() {
+			continue // some contradictions are ok
+		}
+		tokens := wfc.ToTokens8()
+		bytecode := RenderTokens8(tokens, rng)
+		// Re-tokenize and verify round-trip
+		retok := TokenizeGenome8(bytecode)
+		if len(retok) == 0 {
+			t.Errorf("iteration %d: re-tokenize produced empty", i)
+		}
+	}
+}
+
+func TestWFC8vsPureRandom(t *testing.T) {
+	rng := rand.New(rand.NewSource(42))
+	mined := MineConstraints8(testArchetypes)
+	base := BaseConstraints8()
+	merged := MergeConstraints8(mined, base)
+
+	// Count sense→cmp→branch patterns in WFC vs random
+	wfcPatterns := 0
+	randPatterns := 0
+	trials := 200
+
+	for i := 0; i < trials; i++ {
+		// WFC genome
+		numTokens := 8 + rng.Intn(6)
+		wfc := NewWFC1D8(numTokens, merged, rng)
+		wfc.Collapse8(0, Tok8Sense)
+		wfc.Collapse8(numTokens-1, Tok8Yield)
+		if wfc.Generate8() {
+			tokens := wfc.ToTokens8()
+			wfcPatterns += countSCBPatterns8(tokens)
+		}
+
+		// Random genome (same size, no constraints)
+		randTokens := make([]TokenType8, numTokens)
+		for j := range randTokens {
+			randTokens[j] = TokenType8(rng.Intn(int(Num8Types)))
+		}
+		randPatterns += countSCBPatterns8(randTokens)
+	}
+
+	t.Logf("WFC sense→cmp→branch patterns: %d / %d trials", wfcPatterns, trials)
+	t.Logf("Random sense→cmp→branch patterns: %d / %d trials", randPatterns, trials)
+
+	// WFC should produce more structured patterns than random
+	if wfcPatterns <= randPatterns {
+		t.Errorf("WFC patterns (%d) should exceed random (%d)", wfcPatterns, randPatterns)
+	}
+}
+
+// countSCBPatterns8 counts sense→cmp→branch subsequences.
+func countSCBPatterns8(tokens []TokenType8) int {
+	count := 0
+	for i := 0; i < len(tokens)-2; i++ {
+		if tokens[i] == Tok8Sense {
+			// Look for cmp within next 3 tokens
+			for j := i + 1; j < len(tokens)-1 && j <= i+3; j++ {
+				if tokens[j] == Tok8Cmp {
+					// Look for branch within next 2 tokens
+					for k := j + 1; k < len(tokens) && k <= j+2; k++ {
+						if tokens[k] == Tok8Branch {
+							count++
+							break
+						}
+					}
+					break
+				}
+			}
+		}
+	}
+	return count
+}
+
+func TestWFC8Genome(t *testing.T) {
+	rng := rand.New(rand.NewSource(42))
+	ga := NewGA(rng)
+	ga.WFCEnabled = true
+	ga.Archetypes = testArchetypes
+	ga.UpdateConstraints(testArchetypes)
+
+	genome := ga.WFC8Genome(24)
+	if len(genome) < MinGenome {
+		t.Errorf("genome length %d < MinGenome", len(genome))
+	}
+	if len(genome) > MaxGenome {
+		t.Errorf("genome length %d > MaxGenome", len(genome))
+	}
+
+	// Generate multiple and verify none panic
+	for i := 0; i < 100; i++ {
+		g := ga.WFC8Genome(16 + rng.Intn(24))
+		if len(g) < MinGenome || len(g) > MaxGenome {
+			t.Errorf("iteration %d: genome size %d out of bounds", i, len(g))
+		}
+	}
+}
+
 func TestWFCGenomeStressNoPanic(t *testing.T) {
 	// Generate many WFC genomes with various seeds to check for panics
 	for seed := int64(0); seed < 50; seed++ {

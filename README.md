@@ -2,6 +2,42 @@
 
 ## Changelog
 
+### Phase 15 — WFC Genome Generation on Z80: Diverse Brains from 8 Bytes of Constraints (2026-03-05)
+
+NPCs no longer start as 16 identical eat-loops. The Z80 sandbox now uses **1D Wave Function Collapse** to generate structurally diverse, valid genomes at startup — the same technique as the Go sandbox (Report 009), ported to 470 lines of Z80 assembly. Evolution starts with diverse material from tick 0.
+
+- **8-type token system** — Sense, Push, Cmp, Branch, Move, Action, Ops, Yield. Reduced from 10 types to fit a **single byte bitmask**, reusing the popcount LUT and constraint propagation from WFC biome generation. The entire constraint table is 8 bytes.
+- **Archetype-mined constraints** — transition rules extracted from 4 hand-decoded winning genomes (trader, forager, crafter, teacher). Tight constraints that encode behavioral logic: comparisons lead to branches, actions lead to sense-act cycles, yields restart with sensing.
+- **Bidirectional propagation** — forward pass constrains "what can follow"; backward pass constrains "what can precede." Forward-only hit contradictions on 14% of seeds. Adding backward propagation: **50/50 seeds succeed, zero contradictions.**
+- **PUSH DE; RET dispatch** — 8 render handlers emit randomized concrete opcodes via jump table. Each handler picks from curated opcode pools (8 sensors, 4 comparisons, 6 actions, 8 stack ops) using the LFSR.
+- **WFC vs random**: sense→cmp→branch decision patterns appear **5.9x more often** in WFC genomes than pure random (82 vs 14 per 200 trials in Go tests).
+
+Generated Z80 genomes (from test harness):
+```
+G1: 8A 01 8C 00 8A 12 95 00 93 04 F1 26 95 00 93 01 F1  (17B)
+    Sense→Move→Sense→Action→Move→Yield→Cmp→Action→Move→Yield
+
+G3: 8A 0D 0E 10 88 04 97 00 8C 00 26 8A 05 93 06 F1    (16B)
+    Sense→Ops→Cmp→Branch→Action→Move→Cmp→Sense→Move→Yield
+
+G5: 8A 0D 22 02 24 03 08 03 25 94 00 F1                 (12B)
+    Sense→Cmp→Ops→Cmp→Ops→Ops→Ops→Cmp→Action→Yield
+```
+
+Binary size: **6,032 bytes** (+503 from Phase 14). The WFC genome engine is ~8% of the total.
+
+```bash
+# Test harness: generate 5 genomes with hex output
+sjasmplus z80/test_wfc_genome.asm --raw=z80/build/test_wfc_genome.bin
+mzx --run z80/build/test_wfc_genome.bin@8000 --console-io --frames DI:HALT
+
+# Full sandbox with WFC-diverse initial population
+sjasmplus z80/sandbox.asm --raw=z80/build/sandbox.bin
+mzx --run z80/build/sandbox.bin@8000 --console-io --frames DI:HALT
+```
+
+See [WFC Genome Generation on Z80](reports/2026-03-05-015-wfc-genome-z80-port.md) for the full story: archetype constraint mining, the backward propagation discovery, the lfsr_next HL-clobber bug, and detailed analysis of generated genomes.
+
 ### Phase 14 — Z80 Sandbox: Evolutionary NPCs on a ZX Spectrum (2026-03-04)
 
 The Go sandbox's evolutionary mechanics now run on a **real Z80 CPU** (ZX Spectrum 128K). 16 NPCs with bytecode genomes live in a 32x24 tile world, sense their 5x5 neighborhood, execute decisions through the micro-PSIL VM, and evolve through tournament selection with crossover and mutation. **The entire system fits in 4,665 bytes of Z80 machine code.**

@@ -1395,42 +1395,29 @@ init_npcs:
     LD (IX+14), 0              ; item
     LD (IX+15), 0              ; flags
 
-    ; Genome: 16-byte seed
-    LD (IX+11), 16             ; genome length
+    ; Genome: WFC-generated seed
     POP HL
     LD (IX+12), L              ; genome ptr lo
     LD (IX+13), H              ; genome ptr hi
+    PUSH HL                    ; save genome ptr for copy
 
-    ; Write seed genome: push dir → r1w 0 → push 1 → r1w 1 → halt + padding
-    PUSH HL                    ; save genome ptr (lfsr_next clobbers HL)
-    CALL lfsr_next
-    AND $03
-    INC A                      ; 1-4
-    ADD A, $20                 ; SmallNum opcode
-    POP HL
-    LD (HL), A                 ; push dir
-    INC HL
-    LD (HL), $8C               ; OpRing1W
-    INC HL
-    LD (HL), 0                 ; slot 0 (move)
-    INC HL
-    LD (HL), $21               ; push 1 (SmallNum 1)
-    INC HL
-    LD (HL), $8C               ; OpRing1W
-    INC HL
-    LD (HL), 1                 ; slot 1 (action=eat)
-    INC HL
-    LD (HL), $F0               ; halt
-    INC HL
-    ; Pad to 16 bytes
-    LD A, $F0
-    PUSH BC
-    LD B, 9
-.pad_loop:
-    LD (HL), A
-    INC HL
-    DJNZ .pad_loop
-    POP BC
+    ; Generate WFC genome → GA_SCRATCH, length in ga_child_len
+    PUSH IX
+    CALL wfc_gen_genome
+    POP IX
+
+    ; Copy from GA_SCRATCH to genome slot
+    LD A, (ga_child_len)
+    LD (IX+11), A              ; genome length
+    POP HL                     ; HL = genome ptr (dest)
+    EX DE, HL                  ; DE = dest
+    LD HL, GA_SCRATCH          ; HL = source
+    LD C, A
+    LD B, 0
+    OR A
+    JR Z, .in_skip_copy
+    LDIR
+.in_skip_copy:
 
     ; Compute next genome slot (128 bytes per NPC)
     LD L, (IX+12)
@@ -1489,6 +1476,11 @@ seed_food:
 ; WFC Biome Generation
 ; ============================================================================
     INCLUDE "wfc_biome.asm"
+
+; ============================================================================
+; WFC Genome Generation
+; ============================================================================
+    INCLUDE "wfc_genome.asm"
 
 ; ============================================================================
 ; Print stats
