@@ -23,6 +23,10 @@ evolve_step:
     OR A
     RET Z                      ; need at least 1 living
 
+    ; Save living count
+    LD A, C
+    LD (ga_living_cnt), A
+
     ; Find a dead NPC first (preferred); fall back to worst living
     CALL find_dead_or_worst
     LD (ga_worst_ix), HL
@@ -32,7 +36,7 @@ evolve_step:
     LD (ga_parent_a), HL
 
     ; If only 1 alive, clone parent A as parent B
-    LD A, C
+    LD A, (ga_living_cnt)
     CP 2
     JR NC, .ev_two_parents
     LD HL, (ga_parent_a)
@@ -56,14 +60,17 @@ evolve_step:
     POP IX                     ; IX = worst NPC
 
     ; Copy child genome
+    LD A, (ga_child_len)
+    OR A
+    JR Z, .ev_skip_copy        ; guard: don't LDIR with BC=0
     LD L, (IX+12)
     LD H, (IX+13)              ; HL = dest genome ptr
     EX DE, HL                  ; DE = dest
     LD HL, GA_SCRATCH          ; HL = source
-    LD A, (ga_child_len)
     LD C, A
     LD B, 0
     LDIR
+.ev_skip_copy:
 
     ; If NPC was dead, assign new ID
     LD A, (IX+0)
@@ -285,7 +292,11 @@ crossover:
     LD A, B                    ; B is min
 .co_min_ok:
     LD (ga_min_len), A
-    ; Random split
+    ; Random split (B = min len for mod)
+    LD B, A                    ; use min_len, not ga_len_a!
+    LD A, B
+    OR A
+    JR Z, .co_mod_done        ; guard: if min_len=0, split=0
     CALL lfsr_next
 .co_mod:
     CP B
@@ -376,6 +387,8 @@ mutate:
     LD A, (ga_child_len)
     CP GENOME_MAX
     RET NC                     ; already at max
+    OR A
+    RET Z                      ; guard: can't insert into empty genome
     ; Pick position
     LD B, A
     CALL lfsr_next
@@ -482,3 +495,4 @@ ga_len_b:     DB 0
 ga_min_len:   DB 0
 ga_split:     DB 0
 ga_child_len: DB 0
+ga_living_cnt: DB 0
