@@ -2,6 +2,18 @@
 
 ## Changelog
 
+### Phase 16 — Genome Hex Dump & the Heisenbug (2026-03-07)
+
+The Z80 sandbox now dumps all alive NPC genomes as hex at simulation end. An **OUTHEX inline macro** prints each byte as 2 hex digits via port $23 — the CALL-based approach failed mysteriously despite correct assembly. Format: `FFFF LL: BB BB ...` (fitness, length, up to 32 genome bytes).
+
+First real genome visibility from the Z80 VM:
+- **3 of 9 alive NPCs** retain intact WFC genomes: `00 8A 01 01 24 8A 03 97 00 8A 01 8C 00 8A 8C 00 F1` — recognizable sense→compare→act→yield loops
+- **4 of 9** show crossover-corrupted genomes with bytes outside VM opcode range
+- **1** is all zeros (pushes constants, never acts)
+- Early evolution (T=256, 16 GA cycles) is destructive before selection pressure shapes functional brains — matching Go sandbox observations
+
+**Heisenbug**: the dump function hangs for certain binary sizes (6294 bytes) but works for others (6310+ bytes). Same LFSR seed, same simulation code — yet different binary sizes produce different simulation trajectories and exit behavior. Debug `OUT ($25)` markers (stderr) serve as both diagnostics and workaround. See [report](reports/2026-03-07-016-genome-dump-heisenbug.md).
+
 ### Phase 15 — WFC Genome Generation on Z80: Diverse Brains from 8 Bytes of Constraints (2026-03-05)
 
 NPCs no longer start as 16 identical eat-loops. The Z80 sandbox now uses **1D Wave Function Collapse** to generate structurally diverse, valid genomes at startup — the same technique as the Go sandbox (Report 009), ported to 470 lines of Z80 assembly. Evolution starts with diverse material from tick 0.

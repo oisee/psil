@@ -468,3 +468,31 @@ wfc_genome_constraints:
 ; 10-byte work area for WFC genome cells (separate from GA_SCRATCH)
 wg_cells:
     DS WFC_GEN_TOKENS, 0
+
+; Eat-loop-only stub for baseline comparison (USE_EATLOOP builds)
+wg_eatloop_only:
+    LD HL, GA_SCRATCH
+    LD (HL), $8A                ; OpRing0R
+    INC HL
+    LD (HL), $0D                ; sensor: food dir
+    INC HL
+    LD (HL), $8C                ; OpRing1W
+    INC HL
+    LD (HL), $00                ; slot 0 (move)
+    INC HL
+    LD (HL), $21                ; push 1
+    INC HL
+    LD (HL), $8C                ; OpRing1W
+    INC HL
+    LD (HL), $01                ; slot 1 (eat)
+    INC HL
+    LD (HL), $F1                ; yield
+    LD B, 8
+    LD A, $F0
+.el_pad:
+    INC HL
+    LD (HL), A
+    DJNZ .el_pad
+    LD A, 16
+    LD (ga_child_len), A
+    RET

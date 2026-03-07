@@ -281,6 +281,10 @@ tick_loop:
     JR NZ, .no_evolve
     CALL evolve_step
     CALL print_stats
+    ; Dump top genomes every 256 ticks
+    LD A, (tick_count)         ; low byte
+    OR A                       ; tick mod 256 == 0?
+    CALL Z, dump_top_genomes
 .no_evolve:
 
     ; Check tick limit
@@ -294,6 +298,8 @@ tick_loop:
     LD HL, str_done
     CALL print_str
 
+    XOR A
+    OUT ($25), A              ; exit code 0 to stderr
     DI
     HALT
 
@@ -1401,9 +1407,13 @@ init_npcs:
     LD (IX+13), H              ; genome ptr hi
     PUSH HL                    ; save genome ptr for copy
 
-    ; Generate WFC genome → GA_SCRATCH, length in ga_child_len
+    ; Generate genome → GA_SCRATCH, length in ga_child_len
     PUSH IX
+    IFDEF USE_EATLOOP
+    CALL wg_eatloop_only
+    ELSE
     CALL wfc_gen_genome
+    ENDIF
     POP IX
 
     ; Copy from GA_SCRATCH to genome slot
@@ -1582,6 +1592,7 @@ print_stats:
     LD (stat_harvest), HL
     RET
 
+
 ; ============================================================================
 ; print_str: Print null-terminated string at HL
 ; ============================================================================
@@ -1605,3 +1616,98 @@ str_start: DB "NPC Sandbox Z80 v3", 10, 0
 str_done:  DB "Done", 10, 0
 
 sandbox_end:
+
+; ============================================================================
+; Macro: print A as 2 hex digits to port $23
+; ============================================================================
+    MACRO OUTHEX
+    PUSH AF
+    RRCA
+    RRCA
+    RRCA
+    RRCA
+    AND $0F
+    ADD A, '0'
+    CP '9'+1
+    JR C, .oh1_@@
+    ADD A, 7
+.oh1_@@:
+    OUT ($23), A
+    POP AF
+    AND $0F
+    ADD A, '0'
+    CP '9'+1
+    JR C, .oh2_@@
+    ADD A, 7
+.oh2_@@:
+    OUT ($23), A
+    ENDM
+
+; ============================================================================
+; dump_top_genomes: Dump all alive NPCs with genome hex
+; ============================================================================
+dump_top_genomes:
+    LD HL, str_genome_hdr
+    CALL print_str
+    LD IX, NPC_TABLE
+    LD B, MAX_NPCS
+.dtg_loop:
+    PUSH BC
+    LD A, B
+    ADD A, '0'                 ; debug: NPC counter (stderr)
+    OUT ($25), A
+    LD A, (IX+0)               ; NPC ID
+    OR A
+    JP Z, .dtg_skip
+
+    ; Print fitness (hi:lo) as 4 hex digits
+    LD A, (IX+10)
+    OUTHEX
+    LD A, (IX+9)
+    OUTHEX
+    LD A, ' '
+    OUT ($23), A
+
+    ; Genome length (read once, save in C)
+    LD A, (IX+11)
+    LD C, A
+    OUTHEX
+    LD A, ':'
+    OUT ($23), A
+
+    ; Print genome bytes (cap at 32)
+    LD A, C
+    OR A
+    JR Z, .dtg_eol
+    CP 33
+    JR C, .dtg_lenok
+    LD C, 32
+.dtg_lenok:
+    LD L, (IX+12)
+    LD H, (IX+13)
+.dtg_gbyte:
+    LD A, ' '
+    OUT ($23), A
+    LD A, (HL)
+    OUTHEX
+    INC HL
+    DEC C
+    JR NZ, .dtg_gbyte
+
+.dtg_eol:
+    LD A, 10
+    OUT ($23), A
+
+.dtg_skip:
+    LD A, '.'                  ; debug: iteration done (stderr)
+    OUT ($25), A
+    LD DE, NPC_SIZE
+    ADD IX, DE
+    POP BC
+    DEC B
+    JP NZ, .dtg_loop
+    LD A, 10                   ; debug: dump complete (stderr)
+    OUT ($25), A
+    RET
+
+str_genome_hdr: DB "--- Genomes ---", 10, 0
